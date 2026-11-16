@@ -1,5 +1,6 @@
 import { PrismaClient, Role, SpiceLevel } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 import { DEMO_LEBANESE_CATEGORIES } from "../src/lib/demo/lebanese-menu-data";
 
 const prisma = new PrismaClient();
@@ -294,6 +295,7 @@ async function main() {
         tableCode: t.code,
         displayName: t.name,
         capacity: t.capacity,
+        qrToken: crypto.randomBytes(16).toString("hex"),
         isActive: true,
       },
     });

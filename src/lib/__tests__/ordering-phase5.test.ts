@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { startEphemeralPrismaPostgres } from "@/lib/__tests__/helpers/local-pg";
+import { submitSharedTableCartAtomically } from "@/lib/ordering/cart-submit";
 import {
   transitionOrderStatusAtomically,
   validateOrderStatusTransition,
@@ -12,10 +13,13 @@ import {
 } from "@/lib/ordering/pricing";
 import {
   buildKitchenDietarySafetyNote,
+  buildTableAccessGrant,
   decodeSignedSessionList,
   encodeSignedSessionList,
+  isAuthorizedForTableOrdering,
   isTableSessionExpired,
 } from "@/lib/ordering/session";
+import { generateTableQrToken } from "@/lib/qr";
 
 describe("Phase 5 Ordering — Server Pricing, Bill Split, Transitions, Atomic Fee Ledger & Safety Notes", () => {
   it("computes prices strictly from DB, ignores tampered client assumptions, and rejects invalid dishes/modifiers", () => {
@@ -207,6 +211,49 @@ describe("Phase 5 Ordering — Server Pricing, Bill Split, Transitions, Atomic F
     const cookie = encodeSignedSessionList(["sess_1", "sess_2"], secret);
     assert.deepEqual(decodeSignedSessionList(cookie, secret), ["sess_1", "sess_2"]);
     assert.deepEqual(decodeSignedSessionList(`${cookie}tamper`, secret), []);
+
+    // Per-table 128-bit QR token authorization & immediate revocation on token rotation
+    const tokenA = generateTableQrToken();
+    const tokenB = generateTableQrToken();
+    assert.equal(tokenA.length, 32);
+    assert.equal(
+      isAuthorizedForTableOrdering({
+        providedToken: null,
+        expectedTableQrToken: tokenA,
+        cookieEntries: [],
+        sessionId: "sess_1",
+      }),
+      false,
+    );
+    assert.equal(
+      isAuthorizedForTableOrdering({
+        providedToken: tokenA,
+        expectedTableQrToken: tokenA,
+        cookieEntries: [],
+        sessionId: "sess_1",
+      }),
+      true,
+    );
+    const grantA = buildTableAccessGrant("sess_1", tokenA);
+    assert.equal(
+      isAuthorizedForTableOrdering({
+        providedToken: null,
+        expectedTableQrToken: tokenA,
+        cookieEntries: [grantA],
+        sessionId: "sess_1",
+      }),
+      true,
+    );
+    // Once table QR token rotates to tokenB, old cookie grantA is immediately rejected!
+    assert.equal(
+      isAuthorizedForTableOrdering({
+        providedToken: null,
+        expectedTableQrToken: tokenB,
+        cookieEntries: [grantA],
+        sessionId: "sess_1",
+      }),
+      false,
+    );
   });
 
   it("records atomic idempotent PlatformFee on ACCEPTED, skips fee on cancel-before-accept, and voids fee on cancel-after-accept", async () => {
@@ -375,6 +422,68 @@ describe("Phase 5 Ordering — Server Pricing, Bill Split, Transitions, Atomic F
         await env.prisma.platformFee.count({ where: { orderId: orderCancelledEarly.id } }),
         0,
       );
+
+      // Case 4: Shared table double-submit protection — two members pressing Send on the same carts
+      // create ONLY 1 order; the second gets "Order already sent" with the same order id!
+      const cat = await env.prisma.menuCategory.create({
+        data: { restaurantId: rest.id, nameEn: "Mezze", nameAr: "مقبلات" },
+      });
+      const hummus = await env.prisma.menuItem.create({
+        data: {
+          restaurantId: rest.id,
+          categoryId: cat.id,
+          nameEn: "Hummus",
+          nameAr: "حمص",
+          priceAed: "22.00",
+          isPublished: true,
+          isAvailable: true,
+        },
+      });
+      await env.prisma.tableParticipant.create({
+        data: {
+          tableSessionId: session.id,
+          displayName: "Claude",
+          cartItems: [{ menuItemId: hummus.id, modifierIds: [], quantity: 2 }],
+        },
+      });
+
+      const orderCountBefore = await env.prisma.order.count({
+        where: { tableSessionId: session.id },
+      });
+
+      const firstSubmit = await submitSharedTableCartAtomically({
+        db: env.prisma,
+        restaurantId: rest.id,
+        tableId: table.id,
+        tableSessionId: session.id,
+        placedByProfileId: null,
+        placedByGuestToken: "gst_claude",
+      });
+      assert.equal(firstSubmit.ok, true);
+      if (firstSubmit.ok) {
+        assert.equal(firstSubmit.alreadySent, false);
+        assert.equal(firstSubmit.order.subtotalAed, "44.00");
+      }
+
+      const secondSubmit = await submitSharedTableCartAtomically({
+        db: env.prisma,
+        restaurantId: rest.id,
+        tableId: table.id,
+        tableSessionId: session.id,
+        placedByProfileId: null,
+        placedByGuestToken: "gst_bilal",
+      });
+      assert.equal(secondSubmit.ok, true);
+      if (firstSubmit.ok && secondSubmit.ok) {
+        assert.equal(secondSubmit.alreadySent, true);
+        assert.equal(secondSubmit.message, "Order already sent");
+        assert.equal(secondSubmit.order.id, firstSubmit.order.id);
+      }
+
+      const orderCountAfter = await env.prisma.order.count({
+        where: { tableSessionId: session.id },
+      });
+      assert.equal(orderCountAfter - orderCountBefore, 1);
     } finally {
       await env.stop();
     }

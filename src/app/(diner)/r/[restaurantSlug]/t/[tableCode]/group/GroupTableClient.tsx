@@ -83,29 +83,37 @@ export function GroupTableClient({
   restaurantSlug,
   restaurantName,
   tableCode,
+  tableToken,
 }: {
   locale: Locale;
   restaurantSlug: string;
   restaurantName: string;
   tableCode: string;
+  tableToken: string | null;
 }) {
   const router = useRouter();
   const isAr = locale === "ar";
+  const kQuery = tableToken ? `?k=${encodeURIComponent(tableToken)}` : "";
 
   const [sessionData, setSessionData] = useState<TableSessionResponse | null>(null);
+  const [unauthorized, setUnauthorized] = useState(false);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadSession = useCallback(async () => {
-    const res = await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session`, {
+    const res = await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session${kQuery}`, {
       cache: "no-store",
     });
+    if (res.status === 403) {
+      setUnauthorized(true);
+      return;
+    }
     if (res.ok) {
       const json = (await res.json()) as TableSessionResponse;
       setSessionData(json);
     }
-  }, [restaurantSlug, tableCode]);
+  }, [restaurantSlug, tableCode, kQuery]);
 
   useEffect(() => {
     const initial = setTimeout(() => void loadSession(), 0);
@@ -118,10 +126,10 @@ export function GroupTableClient({
 
   async function handleJoinDemoFriends() {
     setBusy(true);
-    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session`, {
+    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session${kQuery}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "join_demo_friends" }),
+      body: JSON.stringify({ action: "join_demo_friends", k: tableToken ?? undefined }),
     });
     await loadSession();
     setBusy(false);
@@ -133,11 +141,12 @@ export function GroupTableClient({
     const me = sessionData.participants.find((p) => p.id === sessionData.selfParticipantId);
     const existingCart = me?.cartItems ?? [];
 
-    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session`, {
+    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session${kQuery}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "update_cart",
+        k: tableToken ?? undefined,
         participantId: sessionData.selfParticipantId,
         cartItems: [
           ...existingCart,
@@ -157,11 +166,12 @@ export function GroupTableClient({
   async function handleClearMyCart() {
     if (!sessionData) return;
     setBusy(true);
-    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session`, {
+    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session${kQuery}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "update_cart",
+        k: tableToken ?? undefined,
         participantId: sessionData.selfParticipantId,
         cartItems: [],
       }),
@@ -175,10 +185,13 @@ export function GroupTableClient({
     setBusy(true);
     setError(null);
 
-    const res = await fetch(`/api/tables/${restaurantSlug}/${tableCode}/orders`, {
+    const res = await fetch(`/api/tables/${restaurantSlug}/${tableCode}/orders${kQuery}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notes: notes.trim() || undefined }),
+      body: JSON.stringify({
+        k: tableToken ?? undefined,
+        notes: notes.trim() || undefined,
+      }),
     });
     setBusy(false);
 
@@ -225,7 +238,13 @@ export function GroupTableClient({
         )}
       </div>
 
-      {!sessionData ? (
+      {unauthorized ? (
+        <div className="rounded-3xl border border-amber-500/40 bg-amber-500/15 p-8 text-center text-sm font-bold text-amber-800 dark:text-amber-300">
+          {isAr
+            ? "امسح رمز QR الموجود على طاولتك للانضمام والطلب."
+            : "Scan the QR at your table to order."}
+        </div>
+      ) : !sessionData ? (
         <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-8 text-center text-sm text-[var(--text-secondary)]">
           {isAr ? "جاري تحميل طاولة المجموعة..." : "Loading table group session..."}
         </div>

@@ -151,7 +151,13 @@ export default async function DinerHomePage() {
         ) : (
           <div className="grid gap-5 sm:grid-cols-2">
             {approvedRestaurants.map((r) => {
-              const firstTable = r.tables[0]?.tableCode ?? "T1";
+              const firstTableObj = r.tables[0];
+              const firstTable = firstTableObj?.tableCode ?? "T1";
+              // Only attach `?k=` for the demo restaurant when DEMO_MODE=true; real restaurants open read-only from home
+              const menuHref =
+                process.env.DEMO_MODE === "true" && r.isDemo && firstTableObj?.qrToken
+                  ? `/r/${r.slug}/t/${firstTable}?k=${encodeURIComponent(firstTableObj.qrToken)}`
+                  : `/r/${r.slug}/t/${firstTable}`;
               const cities = Array.from(new Set(r.branches.map((b) => b.city))).join(" • ");
 
               return (
@@ -186,7 +192,7 @@ export default async function DinerHomePage() {
 
                   <div className="mt-5">
                     <Link
-                      href={`/r/${r.slug}/t/${firstTable}`}
+                      href={menuHref}
                       className="inline-flex min-h-11 w-full items-center justify-center rounded-xl bg-[var(--accent-primary)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--accent-hover)]"
                     >
                       {isAr

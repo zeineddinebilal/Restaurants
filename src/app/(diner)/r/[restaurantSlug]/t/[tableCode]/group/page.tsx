@@ -8,10 +8,16 @@ export const dynamic = "force-dynamic";
 
 export default async function GroupTablePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ restaurantSlug: string; tableCode: string }>;
+  searchParams: Promise<{ k?: string }>;
 }) {
-  const [{ restaurantSlug, tableCode }, { locale }] = await Promise.all([params, getI18nContext()]);
+  const [{ restaurantSlug, tableCode }, sp, { locale }] = await Promise.all([
+    params,
+    searchParams,
+    getI18nContext(),
+  ]);
 
   const restaurant = await prisma.restaurant.findUnique({
     where: { slug: restaurantSlug },
@@ -33,6 +39,7 @@ export default async function GroupTablePage({
       restaurantSlug={restaurant.slug}
       restaurantName={pickLocalized(restaurant.nameEn, restaurant.nameAr, locale)}
       tableCode={restaurant.tables[0]!.tableCode}
+      tableToken={sp.k ?? null}
     />
   );
 }

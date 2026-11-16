@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, ExternalLink, Plus, Printer, Trash2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Plus, Printer, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -78,6 +78,18 @@ export function TablesManagerClient({
       body: JSON.stringify({
         tableId: table.id,
         isActive: !table.isActive,
+      }),
+    });
+    router.refresh();
+  }
+
+  async function handleRotateQrToken(table: SerializedTableWithQr) {
+    await fetch(`/api/restaurant/${restaurantId}/tables`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tableId: table.id,
+        regenerateQrToken: true,
       }),
     });
     router.refresh();
@@ -245,6 +257,15 @@ export function TablesManagerClient({
                   <ExternalLink className="h-3.5 w-3.5" />
                   <span>Open</span>
                 </Link>
+                <button
+                  type="button"
+                  onClick={() => handleRotateQrToken(table)}
+                  title="Regenerate QR token (invalidates old printed QR codes)"
+                  className="inline-flex min-h-9 items-center gap-1 rounded-xl border border-[var(--border-subtle)] px-2.5 py-1.5 text-xs font-semibold"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Rotate</span>
+                </button>
               </div>
 
               <button

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiRole } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
+import { generateTableQrToken } from "@/lib/qr";
 import { requireRestaurantOwnerApi, slugifyRestaurantName } from "@/lib/restaurant/access";
 
 const createRestaurantSchema = z.object({
@@ -128,6 +129,7 @@ export async function POST(req: NextRequest) {
         tableCode: "T1",
         displayName: "Table 1",
         capacity: 4,
+        qrToken: generateTableQrToken(),
         isActive: true,
       },
     });

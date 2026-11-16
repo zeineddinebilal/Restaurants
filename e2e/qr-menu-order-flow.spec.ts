@@ -6,10 +6,15 @@ test("QR -> personalized menu (Claude + Bilal) -> send order -> staff accepts ->
   const dinerContext = await browser.newContext();
   const dinerPage = await dinerContext.newPage();
 
-  // 1. Open QR scanner page and follow the demo table QR link -> /r/demo-lebanese-kitchen/t/T1
+  // 0. Visiting a guessable table URL without `?k={tableToken}` renders read-only (no Add buttons!)
+  await dinerPage.goto("/r/demo-lebanese-kitchen/t/T1");
+  await expect(dinerPage.getByText(/Scan the QR at your table to order/i)).toBeVisible();
+  await expect(dinerPage.getByRole("button", { name: "Add Classic Hummus" })).toHaveCount(0);
+
+  // 1. Open QR scanner page and follow the demo table QR link -> /r/demo-lebanese-kitchen/t/T1?k=...
   await dinerPage.goto("/scan");
   await dinerPage.getByRole("link", { name: /Demo Lebanese Kitchen — Table T1/i }).click();
-  await expect(dinerPage).toHaveURL(/\/r\/demo-lebanese-kitchen\/t\/T1$/);
+  await expect(dinerPage).toHaveURL(/\/r\/demo-lebanese-kitchen\/t\/T1\?k=/);
   await expect(dinerPage.getByText("Always confirm allergies with staff.")).toBeVisible();
 
   // Wait for background table session initialization so demo friends are seated

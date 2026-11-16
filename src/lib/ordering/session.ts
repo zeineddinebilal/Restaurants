@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
+import { verifyTableQrToken } from "@/lib/qr";
 
 export const TABLE_ACCESS_COOKIE_NAME = "pf_table_access";
 
@@ -31,10 +32,14 @@ function verifyPayload(signed: string | undefined | null, secret = getSecret()):
   return crypto.timingSafeEqual(a, b) ? payload : null;
 }
 
-export function encodeSignedSessionList(sessionIds: readonly string[], secret?: string): string {
-  const unique = Array.from(new Set(sessionIds.filter((id) => /^[a-zA-Z0-9_-]+$/.test(id)))).slice(
-    -10,
-  );
+export function buildTableAccessGrant(sessionId: string, qrToken: string): string {
+  return `${sessionId}:${qrToken}`;
+}
+
+export function encodeSignedSessionList(entries: readonly string[], secret?: string): string {
+  const unique = Array.from(
+    new Set(entries.filter((entry) => /^[a-zA-Z0-9_:-]+$/.test(entry))),
+  ).slice(-10);
   return signPayload(unique.join(","), secret);
 }
 
@@ -50,10 +55,34 @@ export function decodeSignedSessionList(
     .filter(Boolean);
 }
 
+/**
+ * Pure check verifying whether a diner/guest is authorized to join a session or place orders
+ * at a table: requires EITHER the current 128-bit `k` QR token OR a signed cookie grant
+ * bound to BOTH `sessionId` AND the table's current `qrToken` (so rotating `qrToken`
+ * immediately revokes old printed QR codes and previously issued cookies).
+ */
+export function isAuthorizedForTableOrdering(params: {
+  providedToken: string | null | undefined;
+  expectedTableQrToken: string;
+  cookieEntries: readonly string[];
+  sessionId?: string | null;
+}): boolean {
+  if (verifyTableQrToken(params.providedToken, params.expectedTableQrToken)) {
+    return true;
+  }
+  if (!params.sessionId) {
+    return false;
+  }
+  const expectedGrant = buildTableAccessGrant(params.sessionId, params.expectedTableQrToken);
+  return params.cookieEntries.includes(expectedGrant);
+}
+
 export async function getAuthorizedTableSessionIdsFromCookie(): Promise<Set<string>> {
   const store = await cookies();
   const raw = store.get(TABLE_ACCESS_COOKIE_NAME)?.value;
-  return new Set(decodeSignedSessionList(raw));
+  const entries = decodeSignedSessionList(raw);
+  // Extract sessionId prefix from `sessionId:qrToken` or bare `sessionId`
+  return new Set(entries.map((e) => e.split(":")[0]!).filter(Boolean));
 }
 
 export function isTableSessionExpired(
@@ -65,10 +94,6 @@ export function isTableSessionExpired(
   return nowMs - lastActivityAt.getTime() > safeTtlHours * 60 * 60 * 1000;
 }
 
-/**
- * Resolves the active `OPEN` TableSession for `tableId`, auto-closing any stale session
- * that exceeded `tableSessionTtlHours` of inactivity, or creating a new one if none exists.
- */
 export async function getOrCreateOpenTableSession(params: {
   restaurantId: string;
   tableId: string;
@@ -91,7 +116,6 @@ export async function getOrCreateOpenTableSession(params: {
 
   const freshest = openSessions[0];
   if (freshest && !isTableSessionExpired(freshest.lastActivityAt, ttlHours, now.getTime())) {
-    // Close any duplicate stray open sessions if any existed
     if (openSessions.length > 1) {
       await prisma.tableSession.updateMany({
         where: {
@@ -106,7 +130,6 @@ export async function getOrCreateOpenTableSession(params: {
     });
   }
 
-  // Close all expired open sessions on this table so the new group starts fresh
   if (openSessions.length > 0) {
     await prisma.tableSession.updateMany({
       where: { id: { in: openSessions.map((s) => s.id) } },
@@ -126,10 +149,6 @@ export async function getOrCreateOpenTableSession(params: {
   });
 }
 
-/**
- * Formats a concise, kitchen-friendly dietary & modifier safety note for an order item
- * so restaurant staff immediately see critical allergy/diet requirements.
- */
 export function buildKitchenDietarySafetyNote(params: {
   participantName: string | null;
   allergens: readonly string[];

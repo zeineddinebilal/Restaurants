@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { generateTableQrToken } from "@/lib/qr";
 import { requireRestaurantOwnerApi } from "@/lib/restaurant/access";
 
 const createTableSchema = z.object({
@@ -24,6 +25,7 @@ const updateTableSchema = z.object({
   capacity: z.number().int().min(1).max(30).optional(),
   branchId: z.string().nullable().optional(),
   isActive: z.boolean().optional(),
+  regenerateQrToken: z.boolean().optional(),
 });
 
 export async function POST(
@@ -81,6 +83,7 @@ export async function POST(
       tableCode: code,
       displayName: parsed.data.displayName,
       capacity: parsed.data.capacity,
+      qrToken: generateTableQrToken(),
       isActive: true,
     },
   });
@@ -145,15 +148,29 @@ export async function PATCH(
     }
   }
 
-  const table = await prisma.diningTable.update({
-    where: { id: existing.id },
-    data: {
-      tableCode: nextCode,
-      displayName: parsed.data.displayName ?? existing.displayName,
-      capacity: parsed.data.capacity ?? existing.capacity,
-      branchId: parsed.data.branchId !== undefined ? parsed.data.branchId : existing.branchId,
-      isActive: parsed.data.isActive !== undefined ? parsed.data.isActive : existing.isActive,
-    },
+  const shouldRotate = Boolean(parsed.data.regenerateQrToken);
+  const nextQrToken = shouldRotate ? generateTableQrToken() : existing.qrToken;
+
+  const table = await prisma.$transaction(async (tx) => {
+    if (shouldRotate) {
+      // Rotating the table QR token also closes any currently open table sessions
+      await tx.tableSession.updateMany({
+        where: { tableId: existing.id, status: "OPEN" },
+        data: { status: "CLOSED", closedAt: new Date() },
+      });
+    }
+
+    return tx.diningTable.update({
+      where: { id: existing.id },
+      data: {
+        tableCode: nextCode,
+        displayName: parsed.data.displayName ?? existing.displayName,
+        capacity: parsed.data.capacity ?? existing.capacity,
+        branchId: parsed.data.branchId !== undefined ? parsed.data.branchId : existing.branchId,
+        isActive: parsed.data.isActive !== undefined ? parsed.data.isActive : existing.isActive,
+        qrToken: nextQrToken,
+      },
+    });
   });
 
   return NextResponse.json({ table });
@@ -181,7 +198,6 @@ export async function DELETE(
   }
 
   if (existing._count.orders > 0) {
-    // Preserve historical order references by deactivating instead of deleting
     const table = await prisma.diningTable.update({
       where: { id: existing.id },
       data: { isActive: false },

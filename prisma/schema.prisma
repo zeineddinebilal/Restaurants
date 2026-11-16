@@ -255,6 +255,7 @@ model DiningTable {
   tableCode    String
   displayName  String
   capacity     Int      @default(4)
+  qrToken      String   @default(cuid())
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -270,14 +271,16 @@ model DiningTable {
 }
 
 model TableSession {
-  id             String             @id @default(cuid())
-  restaurantId   String
-  tableId        String
-  status         TableSessionStatus @default(OPEN)
-  shareCode      String             @unique
-  lastActivityAt DateTime           @default(now())
-  createdAt      DateTime           @default(now())
-  closedAt       DateTime?
+  id              String             @id @default(cuid())
+  restaurantId    String
+  tableId         String
+  status          TableSessionStatus @default(OPEN)
+  shareCode       String             @unique
+  cartVersion     Int                @default(1)
+  lastCartOrderId String?
+  lastActivityAt  DateTime           @default(now())
+  createdAt       DateTime           @default(now())
+  closedAt        DateTime?
 
   restaurant   Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   table        DiningTable        @relation(fields: [tableId], references: [id], onDelete: Cascade)

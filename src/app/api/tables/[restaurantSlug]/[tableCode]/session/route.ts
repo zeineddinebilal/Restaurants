@@ -10,9 +10,11 @@ import { getActiveDinerProfile } from "@/lib/diner/profile";
 import { type EngineDishInput, evaluateGroupSharedDishes } from "@/lib/engine/menu-engine";
 import { computeTableBillSplit, priceOrderFromDatabase } from "@/lib/ordering/pricing";
 import {
+  buildTableAccessGrant,
   decodeSignedSessionList,
   encodeSignedSessionList,
   getOrCreateOpenTableSession,
+  isAuthorizedForTableOrdering,
   TABLE_ACCESS_COOKIE_NAME,
 } from "@/lib/ordering/session";
 
@@ -27,9 +29,11 @@ const cartLineSchema = z.object({
 const sessionMutationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("join_demo_friends"),
+    k: z.string().optional(),
   }),
   z.object({
     action: z.literal("update_cart"),
+    k: z.string().optional(),
     participantId: z.string().min(1),
     cartItems: z.array(cartLineSchema).max(30),
   }),
@@ -96,6 +100,23 @@ export async function GET(
     tableId: table.id,
   });
 
+  const providedK = req.nextUrl.searchParams.get("k");
+  const cookieEntries = decodeSignedSessionList(req.cookies.get(TABLE_ACCESS_COOKIE_NAME)?.value);
+
+  if (
+    !isAuthorizedForTableOrdering({
+      providedToken: providedK,
+      expectedTableQrToken: table.qrToken,
+      cookieEntries,
+      sessionId: session.id,
+    })
+  ) {
+    return NextResponse.json(
+      { error: "Scan the QR at your table to join a session or place orders." },
+      { status: 403 },
+    );
+  }
+
   const activeDiner = await getActiveDinerProfile();
   let newlySignedGuestCookie: string | null = null;
   let guestToken =
@@ -107,7 +128,6 @@ export async function GET(
     guestToken = verifySignedGuestCookieValue(newlySignedGuestCookie)!;
   }
 
-  // Ensure current diner/guest has a participant row on this open TableSession
   let selfParticipant = await prisma.tableParticipant.findFirst({
     where: {
       tableSessionId: session.id,
@@ -135,7 +155,6 @@ export async function GET(
     include: { dinerProfile: true },
   });
 
-  // Build dishes map for server-side pricing & group engine
   const allDbDishes = restaurant.categories.flatMap((c) => c.items);
   const dishesById = new Map(allDbDishes.map((d) => [d.id, d]));
 
@@ -177,7 +196,6 @@ export async function GET(
     })),
   );
 
-  // Collect all draft cart lines across participants and price them server-side
   const combinedDrafts = participants.flatMap((p) => {
     const cart = parseParticipantCart(p.cartItems);
     return cart.map((line) => ({
@@ -208,7 +226,6 @@ export async function GET(
     })),
   });
 
-  // Per-participant personal cart total in fils for remaining-budget engine evaluation
   const personalFilsByParticipant = new Map(
     billSplit.shares.map((s) => [s.participantId, s.totalFils]),
   );
@@ -246,10 +263,8 @@ export async function GET(
     },
   });
 
-  const existingAccessIds = decodeSignedSessionList(
-    req.cookies.get(TABLE_ACCESS_COOKIE_NAME)?.value,
-  );
-  const signedAccessCookie = encodeSignedSessionList([...existingAccessIds, session.id]);
+  const grant = buildTableAccessGrant(session.id, table.qrToken);
+  const signedAccessCookie = encodeSignedSessionList([...cookieEntries, grant]);
 
   const res = NextResponse.json({
     tableSession: {
@@ -314,11 +329,6 @@ export async function POST(
     tableId: table.id,
   });
 
-  // Require caller to hold a valid table session grant (or join via GET first)
-  const accessIds = new Set(
-    decodeSignedSessionList(req.cookies.get(TABLE_ACCESS_COOKIE_NAME)?.value),
-  );
-
   let body: unknown;
   try {
     body = await req.json();
@@ -330,6 +340,22 @@ export async function POST(
   if (!parsed.success) {
     return NextResponse.json({ error: "Validation failed" }, { status: 400 });
   }
+
+  const cookieEntries = decodeSignedSessionList(req.cookies.get(TABLE_ACCESS_COOKIE_NAME)?.value);
+  const providedK = parsed.data.k || req.nextUrl.searchParams.get("k");
+
+  if (
+    !isAuthorizedForTableOrdering({
+      providedToken: providedK,
+      expectedTableQrToken: table.qrToken,
+      cookieEntries,
+      sessionId: session.id,
+    })
+  ) {
+    return NextResponse.json({ error: "Scan the QR at your table to order." }, { status: 403 });
+  }
+
+  const grant = buildTableAccessGrant(session.id, table.qrToken);
 
   if (parsed.data.action === "join_demo_friends") {
     if (process.env.DEMO_MODE !== "true" || !restaurant.isDemo) {
@@ -369,17 +395,13 @@ export async function POST(
     });
 
     const res = NextResponse.json({ ok: true });
-    res.cookies.set(
-      TABLE_ACCESS_COOKIE_NAME,
-      encodeSignedSessionList([...Array.from(accessIds), session.id]),
-      {
-        path: "/",
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 24 * 60 * 60,
-      },
-    );
+    res.cookies.set(TABLE_ACCESS_COOKIE_NAME, encodeSignedSessionList([...cookieEntries, grant]), {
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 24 * 60 * 60,
+    });
     return res;
   }
 
@@ -396,15 +418,14 @@ export async function POST(
     return NextResponse.json({ error: "Participant not found on this table." }, { status: 404 });
   }
 
-  // Verify caller owns this participant OR holds table session access in demo mode for demo friends
   const activeDiner = await getActiveDinerProfile();
   const guestToken = verifySignedGuestCookieValue(req.cookies.get(GUEST_COOKIE_NAME)?.value);
   const ownsParticipant =
     (activeDiner.profile?.id && participant.dinerProfileId === activeDiner.profile.id) ||
     (guestToken && participant.guestToken === guestToken) ||
-    (accessIds.has(session.id) && process.env.DEMO_MODE === "true" && restaurant.isDemo);
+    (process.env.DEMO_MODE === "true" && restaurant.isDemo);
 
-  if (!ownsParticipant && !accessIds.has(session.id)) {
+  if (!ownsParticipant) {
     return NextResponse.json({ error: "Forbidden participant cart update." }, { status: 403 });
   }
 
@@ -415,9 +436,22 @@ export async function POST(
     }),
     prisma.tableSession.update({
       where: { id: session.id },
-      data: { lastActivityAt: new Date() },
+      data: {
+        cartVersion: { increment: 1 },
+        // Adding new cart items resets `lastCartOrderId` so the next round of dishes can be submitted
+        ...(parsed.data.cartItems.length > 0 ? { lastCartOrderId: null } : {}),
+        lastActivityAt: new Date(),
+      },
     }),
   ]);
 
-  return NextResponse.json({ ok: true });
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set(TABLE_ACCESS_COOKIE_NAME, encodeSignedSessionList([...cookieEntries, grant]), {
+    path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 24 * 60 * 60,
+  });
+  return res;
 }

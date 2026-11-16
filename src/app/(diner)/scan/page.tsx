@@ -8,12 +8,24 @@ export default async function QrScanPage() {
     process.env.DEMO_MODE === "true"
       ? prisma.restaurant.findFirst({
           where: { isDemo: true, status: "APPROVED" },
-          select: { slug: true },
+          select: {
+            slug: true,
+            tables: {
+              where: { isActive: true },
+              orderBy: { tableCode: "asc" },
+              take: 1,
+              select: { tableCode: true, qrToken: true },
+            },
+          },
         })
       : Promise.resolve(null),
   ]);
 
-  const demoTableHref = demoRestaurant ? `/r/${demoRestaurant.slug}/t/T1` : null;
+  const demoTable = demoRestaurant?.tables[0];
+  const demoTableHref =
+    demoRestaurant && demoTable
+      ? `/r/${demoRestaurant.slug}/t/${encodeURIComponent(demoTable.tableCode)}?k=${encodeURIComponent(demoTable.qrToken)}`
+      : null;
 
   return <QrScannerClient locale={locale} demoTableHref={demoTableHref} />;
 }

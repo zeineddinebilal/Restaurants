@@ -32,7 +32,7 @@ export default async function PrintableQrSheetPage({
   const activeTables = activeRestaurant.tables.filter((t) => t.isActive);
   const cards = await Promise.all(
     activeTables.map(async (t) => {
-      const url = buildTableQrUrl(origin, activeRestaurant.slug, t.tableCode);
+      const url = buildTableQrUrl(origin, activeRestaurant.slug, t.tableCode, t.qrToken);
       const svg = await generateQrCodeSvg(url);
       return {
         id: t.id,

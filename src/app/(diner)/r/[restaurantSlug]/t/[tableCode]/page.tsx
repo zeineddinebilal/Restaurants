@@ -1,22 +1,29 @@
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { PersonalizedMenuClient } from "@/app/(diner)/r/[restaurantSlug]/t/[tableCode]/PersonalizedMenuClient";
 import { prisma } from "@/lib/db";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
 import type { EngineDishInput } from "@/lib/engine/menu-engine";
 import { getI18nContext } from "@/lib/i18n/server";
+import {
+  decodeSignedSessionList,
+  getOrCreateOpenTableSession,
+  isAuthorizedForTableOrdering,
+  TABLE_ACCESS_COOKIE_NAME,
+} from "@/lib/ordering/session";
+import { verifyTableQrToken } from "@/lib/qr";
 
 export const dynamic = "force-dynamic";
 
 export default async function PersonalizedTableMenuPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ restaurantSlug: string; tableCode: string }>;
+  searchParams: Promise<{ k?: string }>;
 }) {
-  const [{ restaurantSlug, tableCode }, { locale, dict }, { profile }] = await Promise.all([
-    params,
-    getI18nContext(),
-    getActiveDinerProfile(),
-  ]);
+  const [{ restaurantSlug, tableCode }, sp, cookieStore, { locale, dict }, { profile }] =
+    await Promise.all([params, searchParams, cookies(), getI18nContext(), getActiveDinerProfile()]);
 
   const restaurant = await prisma.restaurant.findUnique({
     where: { slug: restaurantSlug },
@@ -48,8 +55,24 @@ export default async function PersonalizedTableMenuPage({
   }
 
   const table = restaurant.tables[0]!;
+  const cookieEntries = decodeSignedSessionList(cookieStore.get(TABLE_ACCESS_COOKIE_NAME)?.value);
 
-  // Record anonymous scan event for Restaurant Insights Agent (non-blocking)
+  // Determine if visitor scanned the physical table QR (`?k=...`) or holds a valid cookie grant
+  let canOrder = verifyTableQrToken(sp.k, table.qrToken);
+  if (!canOrder && cookieEntries.length > 0) {
+    const openSession = await getOrCreateOpenTableSession({
+      restaurantId: restaurant.id,
+      tableId: table.id,
+    });
+    canOrder = isAuthorizedForTableOrdering({
+      providedToken: sp.k,
+      expectedTableQrToken: table.qrToken,
+      cookieEntries,
+      sessionId: openSession.id,
+    });
+  }
+
+  // Record anonymous scan event only when actually scanned or viewed
   prisma.menuScanEvent
     .create({
       data: {
@@ -100,7 +123,6 @@ export default async function PersonalizedTableMenuPage({
     })),
   );
 
-  // Strictly only shown on the demo restaurant AND when DEMO_MODE=true
   const showDemoSwitcher = process.env.DEMO_MODE === "true" && restaurant.isDemo === true;
 
   return (
@@ -122,6 +144,8 @@ export default async function PersonalizedTableMenuPage({
       dishes={engineDishes}
       initialProfile={profile}
       showDemoSwitcher={showDemoSwitcher}
+      canOrder={canOrder}
+      tableToken={canOrder && sp.k ? sp.k : null}
     />
   );
 }

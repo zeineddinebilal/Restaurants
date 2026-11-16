@@ -150,6 +150,8 @@ export function PersonalizedMenuClient({
   dishes,
   initialProfile,
   showDemoSwitcher,
+  canOrder,
+  tableToken,
 }: {
   locale: Locale;
   safetyDisclaimer: string;
@@ -168,6 +170,8 @@ export function PersonalizedMenuClient({
   dishes: EngineDishInput[];
   initialProfile: SerializedDinerProfile | null;
   showDemoSwitcher: boolean;
+  canOrder: boolean;
+  tableToken: string | null;
 }) {
   const router = useRouter();
   const isAr = locale === "ar";
@@ -187,16 +191,14 @@ export function PersonalizedMenuClient({
   const [sendingOrder, setSendingOrder] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
 
-  // Join open TableSession on mount (and load demo friends if in demo mode so persona picks map cleanly)
+  // Join open TableSession on mount only when authorized (`canOrder === true`)
   useEffect(() => {
+    if (!canOrder) return;
     let cancelled = false;
+    const kQuery = tableToken ? `?k=${encodeURIComponent(tableToken)}` : "";
+
     async function initTableSession() {
-      const res = await fetch(
-        `/api/tables/${restaurant.slug}/t-placeholder`.replace(
-          "/t-placeholder",
-          `/${table.tableCode}/session`,
-        ),
-      );
+      const res = await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/session${kQuery}`);
       if (!res.ok || cancelled) return;
       const data = (await res.json()) as {
         selfParticipantId?: string;
@@ -209,12 +211,14 @@ export function PersonalizedMenuClient({
       }
 
       if (data.canLoadDemoFriends) {
-        await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/session`, {
+        await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/session${kQuery}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "join_demo_friends" }),
+          body: JSON.stringify({ action: "join_demo_friends", k: tableToken ?? undefined }),
         });
-        const refreshed = await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/session`);
+        const refreshed = await fetch(
+          `/api/tables/${restaurant.slug}/${table.tableCode}/session${kQuery}`,
+        );
         if (refreshed.ok && !cancelled) {
           const rData = (await refreshed.json()) as {
             participants?: Array<{ id: string; displayName: string }>;
@@ -239,7 +243,7 @@ export function PersonalizedMenuClient({
     return () => {
       cancelled = true;
     };
-  }, [restaurant.slug, table.tableCode]);
+  }, [canOrder, tableToken, restaurant.slug, table.tableCode]);
 
   const activeProfile: EngineDinerProfile = useMemo(() => {
     if (persona === "claude" || persona === "bilal" || persona === "james") {
@@ -382,7 +386,7 @@ export function PersonalizedMenuClient({
     const res = await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/orders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lines }),
+      body: JSON.stringify({ lines, k: tableToken ?? undefined }),
     });
     setSendingOrder(false);
 
@@ -475,26 +479,28 @@ export function PersonalizedMenuClient({
             {isAr ? "التفاصيل والمكونات" : "Details & Modifiers"}
           </Link>
 
-          <button
-            type="button"
-            onClick={() =>
-              addDishToCart({
-                dishId: item.dish.id,
-                nameEn: item.dish.nameEn,
-                nameAr: item.dish.nameAr,
-                unitPriceFils: item.effectivePriceFils,
-                modifierIds: item.preselectedModifierIds,
-                modifierNamesEn: item.preselectedModifiers.map((m) => m.nameEn),
-                modifierNamesAr: item.preselectedModifiers.map((m) => m.nameAr),
-                ownerPersona: persona,
-              })
-            }
-            aria-label={`Add ${item.dish.nameEn}`}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[var(--accent-hover)]"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>{isAr ? "إضافة" : "Add"}</span>
-          </button>
+          {canOrder && (
+            <button
+              type="button"
+              onClick={() =>
+                addDishToCart({
+                  dishId: item.dish.id,
+                  nameEn: item.dish.nameEn,
+                  nameAr: item.dish.nameAr,
+                  unitPriceFils: item.effectivePriceFils,
+                  modifierIds: item.preselectedModifierIds,
+                  modifierNamesEn: item.preselectedModifiers.map((m) => m.nameEn),
+                  modifierNamesAr: item.preselectedModifiers.map((m) => m.nameAr),
+                  ownerPersona: persona,
+                })
+              }
+              aria-label={`Add ${item.dish.nameEn}`}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[var(--accent-hover)]"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>{isAr ? "إضافة" : "Add"}</span>
+            </button>
+          )}
         </div>
       </article>
     );
@@ -530,13 +536,15 @@ export function PersonalizedMenuClient({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={`/r/${restaurant.slug}/t/${table.tableCode}/group`}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[var(--accent-soft)] px-3.5 py-2 text-xs font-bold text-[var(--accent-primary)]"
-            >
-              <Users className="h-3.5 w-3.5" />
-              <span>{isAr ? "طاولة المجموعة وتقسيم الفاتورة" : "Table Group & Split"}</span>
-            </Link>
+            {canOrder && (
+              <Link
+                href={`/r/${restaurant.slug}/t/${table.tableCode}/group${tableToken ? `?k=${encodeURIComponent(tableToken)}` : ""}`}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[var(--accent-soft)] px-3.5 py-2 text-xs font-bold text-[var(--accent-primary)]"
+              >
+                <Users className="h-3.5 w-3.5" />
+                <span>{isAr ? "طاولة المجموعة وتقسيم الفاتورة" : "Table Group & Split"}</span>
+              </Link>
+            )}
 
             <button
               type="button"
@@ -575,6 +583,14 @@ export function PersonalizedMenuClient({
           <ShieldAlert className="h-4 w-4 shrink-0" />
           <span>{safetyDisclaimer}</span>
         </div>
+
+        {!canOrder && (
+          <div className="mt-3 rounded-2xl border border-amber-500/40 bg-amber-500/15 px-4 py-2.5 text-xs font-bold text-amber-800 dark:text-amber-300">
+            {isAr
+              ? "وضع القراءة فقط — امسح رمز QR الموجود على طاولتك للطلب."
+              : "Read-only menu preview — Scan the QR at your table to order."}
+          </div>
+        )}
       </header>
 
       {/* Demo Persona Switcher — strictly gated by DEMO_MODE=true AND restaurant.isDemo */}
@@ -811,27 +827,29 @@ export function PersonalizedMenuClient({
                     </p>
                   </div>
 
-                  <div className="mt-3 flex justify-end border-t border-[var(--border-subtle)] pt-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        addDishToCart({
-                          dishId: shared.dish.id,
-                          nameEn: shared.dish.nameEn,
-                          nameAr: shared.dish.nameAr,
-                          unitPriceFils: shared.effectivePriceFils,
-                          modifierIds: shared.requiredModifiers.map((m) => m.id),
-                          modifierNamesEn: shared.requiredModifiers.map((m) => m.nameEn),
-                          modifierNamesAr: shared.requiredModifiers.map((m) => m.nameAr),
-                          ownerPersona: "group",
-                        })
-                      }
-                      className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>{isAr ? "إضافة للمشاركة" : "Add Shared"}</span>
-                    </button>
-                  </div>
+                  {canOrder && (
+                    <div className="mt-3 flex justify-end border-t border-[var(--border-subtle)] pt-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          addDishToCart({
+                            dishId: shared.dish.id,
+                            nameEn: shared.dish.nameEn,
+                            nameAr: shared.dish.nameAr,
+                            unitPriceFils: shared.effectivePriceFils,
+                            modifierIds: shared.requiredModifiers.map((m) => m.id),
+                            modifierNamesEn: shared.requiredModifiers.map((m) => m.nameEn),
+                            modifierNamesAr: shared.requiredModifiers.map((m) => m.nameAr),
+                            ownerPersona: "group",
+                          })
+                        }
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>{isAr ? "إضافة للمشاركة" : "Add Shared"}</span>
+                      </button>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>

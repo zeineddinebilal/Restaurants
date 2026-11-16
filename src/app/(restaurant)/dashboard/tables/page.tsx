@@ -37,8 +37,8 @@ export default async function RestaurantTablesPage({
 
   const tablesWithQr: SerializedTableWithQr[] = await Promise.all(
     activeRestaurant.tables.map(async (t) => {
-      const qrPath = buildTableQrPath(activeRestaurant.slug, t.tableCode);
-      const qrUrl = buildTableQrUrl(origin, activeRestaurant.slug, t.tableCode);
+      const qrPath = buildTableQrPath(activeRestaurant.slug, t.tableCode, t.qrToken);
+      const qrUrl = buildTableQrUrl(origin, activeRestaurant.slug, t.tableCode, t.qrToken);
       const qrSvg = await generateQrCodeSvg(qrUrl);
       return {
         id: t.id,

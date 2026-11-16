@@ -8,19 +8,23 @@ import {
 } from "@/lib/auth/guest";
 import { prisma } from "@/lib/db";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
+import { submitSharedTableCartAtomically } from "@/lib/ordering/cart-submit";
 import { emitOrderChanged } from "@/lib/ordering/lifecycle";
 import { type OrderDraftLineInput, priceOrderFromDatabase } from "@/lib/ordering/pricing";
 import {
   buildKitchenDietarySafetyNote,
+  buildTableAccessGrant,
   decodeSignedSessionList,
   encodeSignedSessionList,
   getOrCreateOpenTableSession,
+  isAuthorizedForTableOrdering,
   TABLE_ACCESS_COOKIE_NAME,
 } from "@/lib/ordering/session";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 // Client prices/totals are intentionally excluded from the schema and never trusted.
 const createOrderSchema = z.object({
+  k: z.string().optional(),
   notes: z.string().trim().max(400).optional(),
   lines: z
     .array(
@@ -61,6 +65,42 @@ export async function POST(
   }
 
   const table = restaurant.tables[0]!;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+  }
+
+  const parsed = createOrderSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Validation failed", details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  const session = await getOrCreateOpenTableSession({
+    restaurantId: restaurant.id,
+    tableId: table.id,
+  });
+
+  const cookieEntries = decodeSignedSessionList(req.cookies.get(TABLE_ACCESS_COOKIE_NAME)?.value);
+  const providedK = parsed.data.k || req.nextUrl.searchParams.get("k");
+
+  // Require valid per-table secret `k` OR valid signed `pf_table_access` cookie bound to `(session.id, table.qrToken)`
+  if (
+    !isAuthorizedForTableOrdering({
+      providedToken: providedK,
+      expectedTableQrToken: table.qrToken,
+      cookieEntries,
+      sessionId: session.id,
+    })
+  ) {
+    return NextResponse.json({ error: "Scan the QR at your table to order." }, { status: 403 });
+  }
+
   const clientIp = getClientIp(req.headers);
   const activeDiner = await getActiveDinerProfile();
 
@@ -75,7 +115,6 @@ export async function POST(
 
   const callerKey = activeDiner.userId ? `user:${activeDiner.userId}` : `guest:${guestToken}`;
 
-  // Anti-spam rate limits: per user/guestToken, per tableId, and per client IP
   const callerLimit = checkRateLimit({
     key: `order:caller:${callerKey}`,
     limit: 8,
@@ -99,78 +138,85 @@ export async function POST(
     );
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+  const grant = buildTableAccessGrant(session.id, table.qrToken);
+  const signedAccessCookie = encodeSignedSessionList([...cookieEntries, grant]);
+
+  function attachCookies(res: NextResponse): NextResponse {
+    res.cookies.set(TABLE_ACCESS_COOKIE_NAME, signedAccessCookie, {
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 24 * 60 * 60,
+    });
+    if (newlySignedGuestCookie) {
+      res.cookies.set(GUEST_COOKIE_NAME, newlySignedGuestCookie, {
+        path: "/",
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60,
+      });
+    }
+    return res;
   }
 
-  const parsed = createOrderSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Validation failed", details: parsed.error.flatten().fieldErrors },
-      { status: 400 },
+  // Path A: Shared table cart submission (no explicit `lines` array) -> atomic CAS double-submit protection!
+  if (!parsed.data.lines || parsed.data.lines.length === 0) {
+    const cartResult = await submitSharedTableCartAtomically({
+      db: prisma,
+      restaurantId: restaurant.id,
+      tableId: table.id,
+      tableSessionId: session.id,
+      placedByProfileId: activeDiner.profile?.id ?? null,
+      placedByGuestToken: activeDiner.isAuthenticated ? null : guestToken,
+      callerFallbackAllergens: activeDiner.profile?.allergens ?? [],
+      callerFallbackDiets: activeDiner.profile?.dietaryRestrictions ?? [],
+      notes: parsed.data.notes || null,
+    });
+
+    if (!cartResult.ok) {
+      return NextResponse.json(
+        { error: cartResult.error, code: cartResult.code },
+        { status: cartResult.status },
+      );
+    }
+
+    return attachCookies(
+      NextResponse.json(
+        {
+          alreadySent: cartResult.alreadySent,
+          message: cartResult.message,
+          order: cartResult.order,
+        },
+        { status: cartResult.alreadySent ? 200 : 201 },
+      ),
     );
   }
 
-  const session = await getOrCreateOpenTableSession({
-    restaurantId: restaurant.id,
-    tableId: table.id,
-  });
-
+  // Path B: Explicit `lines` submission (reloaded & priced strictly from DB)
   const participants = await prisma.tableParticipant.findMany({
     where: { tableSessionId: session.id },
     include: { dinerProfile: true },
   });
   const participantById = new Map(participants.map((p) => [p.id, p]));
 
-  // Build draft lines either from explicit `lines` or from the table session's participant carts
-  let draftLines: OrderDraftLineInput[] = [];
+  const draftLines: OrderDraftLineInput[] = parsed.data.lines.map((l) => {
+    const matchedPart = l.participantId ? participantById.get(l.participantId) : undefined;
+    return {
+      menuItemId: l.menuItemId,
+      modifierIds: l.modifierIds,
+      quantity: l.quantity,
+      participantId: matchedPart ? matchedPart.id : null,
+      participantName:
+        matchedPart?.displayName ||
+        l.participantName ||
+        activeDiner.profile?.displayName ||
+        "Guest Diner",
+      specialInstructions: l.specialInstructions ?? null,
+    };
+  });
 
-  if (parsed.data.lines && parsed.data.lines.length > 0) {
-    draftLines = parsed.data.lines.map((l) => {
-      const matchedPart = l.participantId ? participantById.get(l.participantId) : undefined;
-      return {
-        menuItemId: l.menuItemId,
-        modifierIds: l.modifierIds,
-        quantity: l.quantity,
-        participantId: matchedPart ? matchedPart.id : null,
-        participantName:
-          matchedPart?.displayName ||
-          l.participantName ||
-          activeDiner.profile?.displayName ||
-          "Guest Diner",
-        specialInstructions: l.specialInstructions ?? null,
-      };
-    });
-  } else {
-    for (const p of participants) {
-      if (!Array.isArray(p.cartItems)) continue;
-      for (const rawItem of p.cartItems as Array<Record<string, unknown>>) {
-        if (typeof rawItem?.menuItemId === "string" && typeof rawItem?.quantity === "number") {
-          const forShared = Boolean(rawItem.forSharedTable);
-          draftLines.push({
-            menuItemId: rawItem.menuItemId,
-            modifierIds: Array.isArray(rawItem.modifierIds)
-              ? rawItem.modifierIds.filter((x): x is string => typeof x === "string")
-              : [],
-            quantity: rawItem.quantity,
-            participantId: forShared ? null : p.id,
-            participantName: forShared ? "Shared Table" : p.displayName,
-            specialInstructions:
-              typeof rawItem.specialInstructions === "string" ? rawItem.specialInstructions : null,
-          });
-        }
-      }
-    }
-  }
-
-  if (draftLines.length === 0) {
-    return NextResponse.json({ error: "Your table cart is empty." }, { status: 400 });
-  }
-
-  // Reload every referenced dish & modifier directly from DB (never trust client prices!)
   const uniqueDishIds = Array.from(new Set(draftLines.map((l) => l.menuItemId)));
   const dbDishes = await prisma.menuItem.findMany({
     where: { id: { in: uniqueDishIds } },
@@ -232,14 +278,8 @@ export async function POST(
           }),
         },
       },
-      include: { items: true },
     });
 
-    // Clear submitted participant carts & update session activity timestamp
-    await tx.tableParticipant.updateMany({
-      where: { tableSessionId: session.id },
-      data: { cartItems: [] },
-    });
     await tx.tableSession.update({
       where: { id: session.id },
       data: { lastActivityAt: now },
@@ -254,40 +294,17 @@ export async function POST(
     status: "SENT",
   });
 
-  const existingAccessIds = decodeSignedSessionList(
-    req.cookies.get(TABLE_ACCESS_COOKIE_NAME)?.value,
-  );
-  const signedAccessCookie = encodeSignedSessionList([...existingAccessIds, session.id]);
-
-  const res = NextResponse.json(
-    {
-      order: {
-        id: createdOrder.id,
-        orderNumber: createdOrder.orderNumber,
-        status: createdOrder.status,
-        subtotalAed: createdOrder.subtotalAed.toFixed(2),
+  return attachCookies(
+    NextResponse.json(
+      {
+        order: {
+          id: createdOrder.id,
+          orderNumber: createdOrder.orderNumber,
+          status: createdOrder.status,
+          subtotalAed: createdOrder.subtotalAed.toFixed(2),
+        },
       },
-    },
-    { status: 201 },
+      { status: 201 },
+    ),
   );
-
-  res.cookies.set(TABLE_ACCESS_COOKIE_NAME, signedAccessCookie, {
-    path: "/",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 24 * 60 * 60,
-  });
-
-  if (newlySignedGuestCookie) {
-    res.cookies.set(GUEST_COOKIE_NAME, newlySignedGuestCookie, {
-      path: "/",
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60,
-    });
-  }
-
-  return res;
 }
