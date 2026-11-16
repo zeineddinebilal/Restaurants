@@ -1,4 +1,11 @@
-import { BarChart3, BookOpenCheck, ClipboardList, QrCode, Settings2 } from "lucide-react";
+import {
+  BarChart3,
+  BookOpenCheck,
+  ClipboardList,
+  CreditCard,
+  QrCode,
+  Settings2,
+} from "lucide-react";
 import Link from "next/link";
 import { requirePageRole } from "@/lib/auth/rbac";
 import { getI18nContext } from "@/lib/i18n/server";
@@ -21,6 +28,7 @@ export default async function RestaurantDashboardLayout({
           menu: "منشئ القائمة والتوثيق",
           tables: "الطاولات ورموز QR",
           analytics: "التحليلات والرؤى",
+          billing: "الفوترة والرسوم",
           orders: "شاشة الطلبات المباشرة",
         }
       : {
@@ -28,6 +36,7 @@ export default async function RestaurantDashboardLayout({
           menu: "Menu Builder & Verify",
           tables: "Tables & QR Codes",
           analytics: "Analytics & Insights",
+          billing: "Billing",
           orders: "Live Orders",
         };
 
@@ -67,6 +76,13 @@ export default async function RestaurantDashboardLayout({
               >
                 <BarChart3 className="h-4 w-4 text-[var(--accent-primary)]" aria-hidden="true" />
                 <span>{labels.analytics}</span>
+              </Link>
+              <Link
+                href="/dashboard/billing"
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-muted)]"
+              >
+                <CreditCard className="h-4 w-4 text-[var(--accent-primary)]" aria-hidden="true" />
+                <span>{labels.billing}</span>
               </Link>
             </>
           )}

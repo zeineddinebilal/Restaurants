@@ -72,7 +72,7 @@ export async function POST(
     },
   });
 
-  if (!restaurant || restaurant.status === "SUSPENDED" || restaurant.tables.length === 0) {
+  if (!restaurant || restaurant.status !== "APPROVED" || restaurant.tables.length === 0) {
     return NextResponse.json({ error: "Table not found" }, { status: 404 });
   }
 

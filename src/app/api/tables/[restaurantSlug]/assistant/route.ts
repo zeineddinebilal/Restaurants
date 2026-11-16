@@ -82,7 +82,7 @@ export async function POST(
     },
   });
 
-  if (!restaurant || restaurant.status === "SUSPENDED") {
+  if (!restaurant || restaurant.status !== "APPROVED") {
     return NextResponse.json({ error: "Restaurant not found" }, { status: 404 });
   }
 

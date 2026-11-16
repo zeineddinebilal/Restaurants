@@ -60,8 +60,15 @@ export async function POST(
     },
   });
 
-  if (!restaurant || restaurant.status === "SUSPENDED" || restaurant.tables.length === 0) {
+  if (!restaurant || restaurant.tables.length === 0) {
     return NextResponse.json({ error: "Restaurant or table not found." }, { status: 404 });
+  }
+
+  if (restaurant.status !== "APPROVED") {
+    return NextResponse.json(
+      { error: "This restaurant is not currently approved to accept orders." },
+      { status: 403 },
+    );
   }
 
   const table = restaurant.tables[0]!;

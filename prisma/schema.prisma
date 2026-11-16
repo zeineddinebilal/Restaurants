@@ -77,6 +77,7 @@ model User {
   restaurantMembers RestaurantMember[]
   verifiedItems     MenuItem[]         @relation("VerifiedBy")
   aiUsageLogs       AiUsageLog[]
+  adminAuditLogs    AdminAuditLog[]    @relation("AdminAuditActor")
 
   @@index([role])
 }
@@ -397,30 +398,40 @@ model PlatformFee {
   recordedAt           DateTime  @default(now())
   voidedAt             DateTime?
   invoiceId            String?
+  voidCreditInvoiceId  String?
 
-  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  invoice    Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  order             Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  restaurant        Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  invoice           Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  voidCreditInvoice Invoice?   @relation("InvoiceVoidCredits", fields: [voidCreditInvoiceId], references: [id], onDelete: SetNull)
 
   @@index([restaurantId, recordedAt])
+  @@index([restaurantId, isVoided, voidCreditInvoiceId])
   @@index([invoiceId])
 }
 
 model Invoice {
-  id            String        @id @default(cuid())
-  invoiceNumber String        @unique
-  restaurantId  String
-  year          Int
-  month         Int
-  totalOrders   Int
-  grossSalesAed Decimal       @db.Decimal(10, 2)
-  totalFeesAed  Decimal       @db.Decimal(10, 2)
-  status        InvoiceStatus @default(ISSUED)
-  generatedAt   DateTime      @default(now())
-  paidAt        DateTime?
+  id                String        @id @default(cuid())
+  sequenceNumber    Int           @unique
+  invoiceNumber     String        @unique
+  restaurantId      String
+  year              Int
+  month             Int
+  periodStartUtc    DateTime?
+  periodEndUtc      DateTime?
+  totalOrders       Int
+  grossSalesAed     Decimal       @db.Decimal(10, 2)
+  periodFeesAed     Decimal       @default(0.00) @db.Decimal(10, 2)
+  adjustmentsAed    Decimal       @default(0.00) @db.Decimal(10, 2)
+  totalFeesAed      Decimal       @db.Decimal(10, 2)
+  lineItemsSnapshot Json          @default("[]")
+  status            InvoiceStatus @default(ISSUED)
+  generatedAt       DateTime      @default(now())
+  paidAt            DateTime?
 
-  restaurant Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  fees       PlatformFee[]
+  restaurant  Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  fees        PlatformFee[]
+  voidCredits PlatformFee[] @relation("InvoiceVoidCredits")
 
   @@unique([restaurantId, year, month])
   @@index([restaurantId])
@@ -478,4 +489,23 @@ model AiUsageLog {
   @@index([clientIp, createdAt])
   @@index([agentName, createdAt])
   @@index([restaurantId, createdAt])
+}
+
+model AdminAuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String
+  actorEmail  String
+  action      String
+  targetType  String
+  targetId    String
+  summary     String
+  beforeJson  Json?
+  afterJson   Json?
+  createdAt   DateTime @default(now())
+
+  actor User @relation("AdminAuditActor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@index([actorUserId, createdAt])
 }

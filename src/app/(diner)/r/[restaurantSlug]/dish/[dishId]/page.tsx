@@ -35,7 +35,7 @@ export default async function DishDetailPage({
     where: {
       id: dishId,
       isPublished: true,
-      restaurant: { slug: restaurantSlug },
+      restaurant: { slug: restaurantSlug, status: "APPROVED" },
     },
     include: {
       restaurant: {

@@ -1,4 +1,4 @@
-import type { Role } from "@prisma/client";
+import type { PrismaClient, Role } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/config";
@@ -55,18 +55,12 @@ export function evaluateRoleGuard(params: {
   return { ok: true, user };
 }
 
-/**
- * Resolves the live user record from DB for the active session so role changes
- * or account suspensions take effect immediately on guarded pages and API routes.
- */
-export async function getLiveAuthenticatedUser(): Promise<AuthenticatedUser | null> {
-  const session = await auth();
-  if (!session?.user?.id || session.user.isActive === false) {
-    return null;
-  }
-
-  const dbUser = await prisma.user.findUnique({
-    where: { id: session.user.id },
+export async function loadLiveAuthenticatedUserById(
+  userId: string,
+  db: PrismaClient = prisma,
+): Promise<AuthenticatedUser | null> {
+  const dbUser = await db.user.findUnique({
+    where: { id: userId },
     select: {
       id: true,
       email: true,
@@ -91,10 +85,24 @@ export async function getLiveAuthenticatedUser(): Promise<AuthenticatedUser | nu
   };
 }
 
+/**
+ * Resolves the live user record from DB for the active session so role changes
+ * or account suspensions take effect immediately on guarded pages and API routes.
+ */
+export async function getLiveAuthenticatedUser(): Promise<AuthenticatedUser | null> {
+  const session = await auth();
+  if (!session?.user?.id || session.user.isActive === false) {
+    return null;
+  }
+
+  return loadLiveAuthenticatedUserById(session.user.id, prisma);
+}
+
 export async function requireApiRole(
   allowedRoles: readonly Role[],
+  resolveUser: () => Promise<AuthenticatedUser | null> = getLiveAuthenticatedUser,
 ): Promise<{ ok: true; user: AuthenticatedUser } | { ok: false; response: NextResponse }> {
-  const liveUser = await getLiveAuthenticatedUser();
+  const liveUser = await resolveUser();
   const check = evaluateRoleGuard({ user: liveUser, allowedRoles });
 
   if (!check.ok) {

@@ -29,7 +29,7 @@ export default async function GroupTablePage({
     },
   });
 
-  if (!restaurant || restaurant.status === "SUSPENDED" || restaurant.tables.length === 0) {
+  if (!restaurant || restaurant.status !== "APPROVED" || restaurant.tables.length === 0) {
     notFound();
   }
 
