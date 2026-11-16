@@ -51,3 +51,14 @@ body {
   outline: 2px solid var(--accent-primary);
   outline-offset: 2px;
 }
+
+/* Clean light-paper output for Printable QR Sheets, Allergen Matrix & Invoices (even from Dark Mode) */
+@media print {
+  html,
+  body {
+    background-color: #ffffff !important;
+    color: #1f1916 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}

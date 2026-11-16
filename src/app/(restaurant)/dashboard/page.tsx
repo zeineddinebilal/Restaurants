@@ -9,7 +9,7 @@ import { loadManagedRestaurants } from "@/lib/restaurant/loader";
 export default async function RestaurantDashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ restaurantId?: string }>;
+  searchParams: Promise<{ restaurantId?: string; inviteNotice?: string }>;
 }) {
   const [user, { locale }, sp] = await Promise.all([
     requirePageRole(["RESTAURANT_OWNER", "ADMIN"]),
@@ -64,6 +64,7 @@ export default async function RestaurantDashboardPage({
       locale={locale}
       restaurants={restaurants.map((r) => ({ id: r.id, nameEn: r.nameEn, nameAr: r.nameAr }))}
       active={serializedActive}
+      inviteExpiredNotice={sp.inviteNotice === "expired"}
     />
   );
 }

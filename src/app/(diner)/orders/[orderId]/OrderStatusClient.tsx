@@ -149,7 +149,7 @@ export function OrderStatusClient({
         href={`/r/${order.restaurant.slug}/t/${order.table.tableCode}`}
         className="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-[var(--accent-primary)] hover:underline"
       >
-        <ArrowLeft className="h-4 w-4" />
+        <ArrowLeft className="h-4 w-4 rtl:rotate-180" aria-hidden="true" />
         <span>
           {isAr ? "العودة لقائمة الطاولة" : "Back to Table Menu"} (
           {pickLocalized(order.restaurant.nameEn, order.restaurant.nameAr, locale)})
@@ -181,7 +181,7 @@ export function OrderStatusClient({
             </span>
           </div>
         ) : (
-          <ol className="mt-6 grid grid-cols-4 gap-2">
+          <ol className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {STEPS.map((step, idx) => {
               const reached = idx <= currentStepIndex;
               return (

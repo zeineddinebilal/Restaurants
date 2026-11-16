@@ -653,7 +653,7 @@ export function DinerProfileBuilder({
               href="/home"
               className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-extrabold text-white hover:bg-emerald-700"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
+              <ArrowLeft className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden="true" />
               <span>{isAr ? "العودة للرئيسية" : "Back to Home"}</span>
             </Link>
           )}

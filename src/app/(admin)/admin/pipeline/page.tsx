@@ -48,6 +48,7 @@ export default async function AdminSalesPipelinePage() {
     rewardOrOffer: p.rewardOrOffer,
     notesHistory: parseNotesHistory(p.notesHistory),
     inviteToken: p.inviteToken,
+    inviteExpiresAtIso: p.inviteExpiresAt ? p.inviteExpiresAt.toISOString() : null,
     convertedRestaurant: p.convertedRestaurant,
     lastUpdatedByEmail: p.lastUpdatedByEmail,
     updatedAtIso: p.updatedAt.toISOString(),

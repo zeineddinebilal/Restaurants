@@ -1,7 +1,10 @@
 import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { convertProspectOnOwnerSignupTx } from "@/lib/admin/prospects";
+import {
+  convertProspectOnOwnerSignupTx,
+  INVITE_EXPIRED_OR_USED_MESSAGE,
+} from "@/lib/admin/prospects";
 import { prisma } from "@/lib/db";
 import { isLocale } from "@/lib/i18n/dictionaries";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
@@ -57,7 +60,7 @@ export async function POST(req: NextRequest) {
   const passwordHash = await bcrypt.hash(parsed.data.password, 10);
   const locale = isLocale(parsed.data.locale) ? parsed.data.locale : "en";
 
-  const user = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const effectiveRole = parsed.data.prospectInvite ? "RESTAURANT_OWNER" : parsed.data.role;
 
     const created = await tx.user.create({
@@ -77,6 +80,8 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    let inviteWarning: string | undefined;
+
     if (created.role === "DINER") {
       await tx.dinerProfile.create({
         data: {
@@ -85,16 +90,25 @@ export async function POST(req: NextRequest) {
         },
       });
     } else if (parsed.data.prospectInvite) {
-      await convertProspectOnOwnerSignupTx({
+      const conversion = await convertProspectOnOwnerSignupTx({
         tx,
         inviteToken: parsed.data.prospectInvite,
         ownerUserId: created.id,
         ownerEmail: email,
       });
+      if (!conversion.converted) {
+        inviteWarning = INVITE_EXPIRED_OR_USED_MESSAGE;
+      }
     }
 
-    return created;
+    return { user: created, inviteWarning };
   });
 
-  return NextResponse.json({ user }, { status: 201 });
+  return NextResponse.json(
+    {
+      user: result.user,
+      ...(result.inviteWarning ? { inviteWarning: result.inviteWarning } : {}),
+    },
+    { status: 201 },
+  );
 }

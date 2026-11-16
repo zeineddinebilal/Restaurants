@@ -64,12 +64,13 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
         top30Rank: 1,
         status: "GREY",
         source: "admin",
-        contactPerson: null,
-        dateApproached: null,
+        contactPerson: "\t=SUM(A1:A2)",
+        dateApproached: "\r=1+1",
         outcomeNotes: null,
         rewardOrOffer: null,
         notesHistory: [],
         inviteToken: null,
+        inviteExpiresAt: null,
         convertedRestaurantId: null,
         lastUpdatedById: null,
         lastUpdatedByEmail: null,
@@ -78,9 +79,11 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
       },
     ]);
 
-    // Formula injection (`=CMD...` and `@handle`) prefixed with single quote, while `+971...` phone stays clean
+    // Formula injection (`=CMD...`, `@handle`, `\t...`, `\r...`) prefixed with single quote, while `+971...` phone stays clean
     assert.ok(csv.includes("'=CMD|"));
     assert.ok(csv.includes("'@handle"));
+    assert.ok(csv.includes("'\t=SUM(A1:A2)"));
+    assert.ok(csv.includes("'\r=1+1"));
     assert.ok(csv.includes("+971 50 123 4567"));
     assert.ok(csv.includes('"Line 1, with comma"'));
   });
@@ -88,7 +91,7 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
   it("enforces the legal wording rule: never claims forbidden food-code compliance anywhere in repo", () => {
     const forbiddenPhrase = ["compliant with", "Dubai Food Code"].join(" ").toLowerCase();
     const rootsToScan = ["src", "prisma"];
-    const rootFiles = ["README.md", "PLAN.md"];
+    const rootFiles = ["README.md", "PLAN.md", "DEMO.md"];
 
     function walkFiles(dir: string): string[] {
       const out: string[] = [];
@@ -187,8 +190,8 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
         assert.match(notes[0]?.text ?? "", /Qlub coexistence/);
       }
 
-      // 4. Generate Convert-to-Restaurant invite & complete owner signup transaction
-      const inviteRes = await generateProspectConvertInvite(
+      // 4. Generate Convert-to-Restaurant invite, test regenerate (invalidates old token), expiry, and CAS race protection
+      const initialInviteRes = await generateProspectConvertInvite(
         {
           prospectId: marina.id,
           actorUserId: admin.id,
@@ -196,33 +199,101 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
         },
         prisma,
       );
-      assert.equal(inviteRes.ok, true);
-      if (!inviteRes.ok) throw new Error("Expected invite token");
+      assert.equal(initialInviteRes.ok, true);
+      if (!initialInviteRes.ok) throw new Error("Expected initial invite token");
 
-      const convertedRestaurant = await prisma.$transaction(async (tx) => {
-        const ownerUser = await tx.user.create({
-          data: {
-            email: "tariq-owner@example.com",
-            name: "Tariq Owner",
-            role: "RESTAURANT_OWNER",
-          },
+      // Regenerating issues a new 14-day token and invalidates the old one
+      const inviteRes = await generateProspectConvertInvite(
+        {
+          prospectId: marina.id,
+          actorUserId: admin.id,
+          actorEmail: admin.email,
+          regenerate: true,
+        },
+        prisma,
+      );
+      assert.equal(inviteRes.ok, true);
+      if (!inviteRes.ok) throw new Error("Expected regenerated invite token");
+      assert.notEqual(inviteRes.inviteToken, initialInviteRes.inviteToken);
+
+      // Old invalidated token fails cleanly without creating a restaurant
+      const oldTokenAttempt = await prisma.$transaction(async (tx) => {
+        const u = await tx.user.create({
+          data: { email: "old-token@example.com", name: "Old Token", role: "RESTAURANT_OWNER" },
+        });
+        return convertProspectOnOwnerSignupTx({
+          tx,
+          inviteToken: initialInviteRes.inviteToken,
+          ownerUserId: u.id,
+          ownerEmail: u.email,
+        });
+      });
+      assert.equal(oldTokenAttempt.converted, false);
+
+      // Expired token check (15 days in the future > 14-day TTL) fails cleanly
+      const fifteenDaysLater = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+      const expiredAttempt = await prisma.$transaction(async (tx) => {
+        const u = await tx.user.create({
+          data: { email: "expired-token@example.com", name: "Expired", role: "RESTAURANT_OWNER" },
         });
         return convertProspectOnOwnerSignupTx({
           tx,
           inviteToken: inviteRes.inviteToken,
-          ownerUserId: ownerUser.id,
-          ownerEmail: ownerUser.email,
+          ownerUserId: u.id,
+          ownerEmail: u.email,
+          now: fifteenDaysLater,
         });
       });
+      assert.equal(expiredAttempt.converted, false);
 
-      assert.ok(convertedRestaurant, "Expected Restaurant to be created from invite");
+      // Concurrent CAS race: two simultaneous signups with the exact same valid token -> ONLY ONE converts!
+      const [raceA, raceB] = await Promise.all([
+        prisma.$transaction(async (tx) => {
+          const ownerA = await tx.user.create({
+            data: { email: "tariq-a@example.com", name: "Tariq A", role: "RESTAURANT_OWNER" },
+          });
+          return convertProspectOnOwnerSignupTx({
+            tx,
+            inviteToken: inviteRes.inviteToken,
+            ownerUserId: ownerA.id,
+            ownerEmail: ownerA.email,
+          });
+        }),
+        prisma.$transaction(async (tx) => {
+          const ownerB = await tx.user.create({
+            data: { email: "tariq-b@example.com", name: "Tariq B", role: "RESTAURANT_OWNER" },
+          });
+          return convertProspectOnOwnerSignupTx({
+            tx,
+            inviteToken: inviteRes.inviteToken,
+            ownerUserId: ownerB.id,
+            ownerEmail: ownerB.email,
+          });
+        }),
+      ]);
+
+      const winners = [raceA, raceB].filter((r) => r.converted);
+      const losers = [raceA, raceB].filter((r) => !r.converted);
+      assert.equal(winners.length, 1, "CAS must allow exactly ONE concurrent conversion");
+      assert.equal(
+        losers.length,
+        1,
+        "Second concurrent signup must not create a duplicate restaurant",
+      );
+      const convertedRestaurant = winners[0]!.restaurant;
       assert.equal(convertedRestaurant.nameEn, "Synthetic Marina Grill");
+
+      const marinaRestaurantsCount = await prisma.restaurant.count({
+        where: { nameEn: "Synthetic Marina Grill" },
+      });
+      assert.equal(marinaRestaurantsCount, 1);
 
       const marinaAfterConvert = await prisma.prospect.findUniqueOrThrow({
         where: { id: marina.id },
       });
       assert.equal(marinaAfterConvert.status, "GREEN");
       assert.equal(marinaAfterConvert.convertedRestaurantId, convertedRestaurant.id);
+      assert.equal(marinaAfterConvert.inviteToken, null);
 
       // Re-importing CSV where Marina was GREY must NOT downgrade an already converted GREEN partner!
       await importProspectsCsvWithAudit(
@@ -238,7 +309,8 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
       });
       assert.equal(marinaAfterReimport.status, "GREEN");
 
-      // 5. Public website "Request a demo" creates GREY + source "website"
+      // 5. Public website "Request a demo":
+      // 5a. New restaurant -> creates GREY + source "website"
       const webRes = await submitWebsiteDemoRequest(
         {
           restaurantName: "Jumeirah Olive House",
@@ -260,6 +332,54 @@ describe("Phase 7.6 — Research-Driven Upgrades (CRM, Allergen Matrix, Payment 
         assert.equal(webProspect.source, "website");
         assert.equal(webProspect.existingQrProvider, "FineDine");
       }
+
+      // 5b. Existing curated CRM prospect -> NEVER overwrites non-empty contactPerson, phone, QR, or status; caps notesHistory at 200!
+      const cedarBefore = await prisma.prospect.findFirstOrThrow({
+        where: { name: "Synthetic Cedar Bistro" },
+      });
+      const prefilled205Notes = Array.from({ length: 205 }, (_, i) => ({
+        id: `n_${i}`,
+        text: `Historical note ${i}`,
+        actorEmail: "admin@example.com",
+        createdAtIso: new Date().toISOString(),
+      }));
+      await prisma.prospect.update({
+        where: { id: cedarBefore.id },
+        data: { status: "RED", notesHistory: prefilled205Notes },
+      });
+
+      const spoofAttempt = await submitWebsiteDemoRequest(
+        {
+          restaurantName: "Synthetic Cedar Bistro",
+          area: "Cluster D, JLT",
+          city: "Dubai",
+          contactPerson: "Attacker Spoof",
+          phone: "+971 50 000 0000",
+          existingQrProvider: "SpoofQR",
+          notes: "Trying to overwrite curated fields",
+        },
+        prisma,
+      );
+      assert.equal(spoofAttempt.ok, true);
+
+      const cedarAfter = await prisma.prospect.findUniqueOrThrow({
+        where: { id: cedarBefore.id },
+      });
+      assert.equal(
+        cedarAfter.contactPerson,
+        "Rami Haddad",
+        "Must not overwrite non-empty contactPerson",
+      );
+      assert.equal(cedarAfter.phone, "+971 50 999 8888", "Must not overwrite non-empty phone");
+      assert.equal(
+        cedarAfter.existingQrProvider,
+        "Qlub",
+        "Must not overwrite non-empty QR provider",
+      );
+      assert.equal(cedarAfter.status, "RED", "Must not overwrite existing CRM status");
+      const cappedNotes = parseNotesHistory(cedarAfter.notesHistory);
+      assert.equal(cappedNotes.length, 200, "notesHistory must be capped at 200 entries");
+      assert.match(cappedNotes[0]?.text ?? "", /Attacker Spoof/);
 
       // 6. Verify Restaurant allergenPersonInCharge, existingPaymentProvider, and MenuItem.caloriesKcal
       const updatedRest = await prisma.restaurant.update({

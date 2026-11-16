@@ -8,6 +8,7 @@ import {
   ExternalLink,
   ListFilter,
   Plus,
+  RefreshCw,
   Upload,
   UserPlus,
 } from "lucide-react";
@@ -41,6 +42,7 @@ export interface ProspectItem {
   rewardOrOffer: string | null;
   notesHistory: ProspectNoteEntry[];
   inviteToken: string | null;
+  inviteExpiresAtIso: string | null;
   convertedRestaurant: {
     id: string;
     slug: string;
@@ -332,21 +334,37 @@ export function PipelineAdminClient({
     }
   }
 
-  async function generateInviteLink(prospectId: string) {
+  async function generateInviteLink(prospectId: string, regenerate = false) {
     setBusyId(prospectId);
     setBanner(null);
     try {
       const res = await fetch(`/api/admin/prospects/${prospectId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "convert_invite" }),
+        body: JSON.stringify({ action: "convert_invite", regenerate }),
       });
-      const data = (await res.json()) as { inviteUrl?: string; error?: string };
+      const data = (await res.json()) as {
+        inviteToken?: string;
+        inviteUrl?: string;
+        inviteExpiresAt?: string;
+        error?: string;
+      };
       if (!res.ok || !data.inviteUrl) {
         setBanner({ type: "err", text: data.error || "Could not create invite link" });
         return;
       }
       setInviteUrls((prev) => ({ ...prev, [prospectId]: data.inviteUrl! }));
+      setProspects((prev) =>
+        prev.map((item) =>
+          item.id === prospectId
+            ? {
+                ...item,
+                inviteToken: data.inviteToken ?? item.inviteToken,
+                inviteExpiresAtIso: data.inviteExpiresAt ?? item.inviteExpiresAtIso,
+              }
+            : item,
+        ),
+      );
       await navigator.clipboard.writeText(data.inviteUrl).catch(() => {});
       setCopiedId(prospectId);
       setTimeout(() => setCopiedId(null), 2500);
@@ -471,11 +489,13 @@ export function PipelineAdminClient({
                 <thead className="bg-[var(--bg-muted)] text-[var(--text-secondary)]">
                   <tr>
                     <th className="px-3 py-2 text-start">#</th>
-                    <th className="px-3 py-2 text-start">Name</th>
-                    <th className="px-3 py-2 text-start">Area / City</th>
-                    <th className="px-3 py-2 text-start">Cuisine</th>
-                    <th className="px-3 py-2 text-start">QR Provider</th>
-                    <th className="px-3 py-2 text-start">Status</th>
+                    <th className="px-3 py-2 text-start">{isAr ? "الاسم" : "Name"}</th>
+                    <th className="px-3 py-2 text-start">
+                      {isAr ? "المنطقة / المدينة" : "Area / City"}
+                    </th>
+                    <th className="px-3 py-2 text-start">{isAr ? "المطبخ" : "Cuisine"}</th>
+                    <th className="px-3 py-2 text-start">{isAr ? "مزود QR" : "QR Provider"}</th>
+                    <th className="px-3 py-2 text-start">{isAr ? "الحالة" : "Status"}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)]">
@@ -618,6 +638,7 @@ export function PipelineAdminClient({
       <div className="grid gap-2.5 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 sm:grid-cols-6">
         <input
           type="search"
+          aria-label={isAr ? "بحث في المطاعم" : "Search prospects"}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder={isAr ? "بحث بالاسم، المطبخ، QR..." : "Search name, cuisine, QR..."}
@@ -625,7 +646,7 @@ export function PipelineAdminClient({
         />
 
         <select
-          aria-label="City filter"
+          aria-label={isAr ? "تصفية حسب المدينة" : "City filter"}
           value={cityFilter}
           onChange={(e) => setCityFilter(e.target.value)}
           className="min-h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 text-xs"
@@ -640,6 +661,7 @@ export function PipelineAdminClient({
 
         <input
           type="text"
+          aria-label={isAr ? "تصفية حسب المنطقة" : "District or area filter"}
           value={districtFilter}
           onChange={(e) => setDistrictFilter(e.target.value)}
           placeholder={isAr ? "المنطقة / الحي" : "District / Area"}
@@ -647,15 +669,15 @@ export function PipelineAdminClient({
         />
 
         <select
-          aria-label="Status filter"
+          aria-label={isAr ? "تصفية حسب الحالة" : "Status filter"}
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as "ALL" | ProspectStatus)}
           className="min-h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 text-xs"
         >
           <option value="ALL">{isAr ? "كل الحالات" : "All Statuses"}</option>
-          <option value="GREEN">GREEN (Partner)</option>
-          <option value="GREY">GREY (Potential)</option>
-          <option value="RED">RED (Declined/Closed)</option>
+          <option value="GREEN">{isAr ? "GREEN (شريك)" : "GREEN (Partner)"}</option>
+          <option value="GREY">{isAr ? "GREY (محتمل)" : "GREY (Potential)"}</option>
+          <option value="RED">{isAr ? "RED (مغلق / مرفوض)" : "RED (Declined/Closed)"}</option>
         </select>
 
         <div className="flex flex-wrap items-center gap-3 px-1 text-xs font-medium text-[var(--text-primary)]">
@@ -730,22 +752,26 @@ export function PipelineAdminClient({
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--text-secondary)]">
                       {p.existingQrProvider && (
                         <span>
-                          <strong className="text-[var(--text-primary)]">QR:</strong>{" "}
+                          <strong className="text-[var(--text-primary)]">
+                            {isAr ? "مزود QR:" : "QR:"}
+                          </strong>{" "}
                           {p.existingQrProvider}
                         </span>
                       )}
                       {p.ownership && (
                         <span>
-                          <strong className="text-[var(--text-primary)]">Ownership:</strong>{" "}
+                          <strong className="text-[var(--text-primary)]">
+                            {isAr ? "الملكية:" : "Ownership:"}
+                          </strong>{" "}
                           {p.ownership}
                         </span>
                       )}
                       {p.phone && (
-                        <a href={`tel:${p.phone}`} className="underline">
+                        <a href={`tel:${p.phone}`} dir="ltr" className="underline">
                           {p.phone}
                         </a>
                       )}
-                      {p.instagram && <span>IG: {p.instagram}</span>}
+                      {p.instagram && <span dir="ltr">IG: {p.instagram}</span>}
                       {p.address && <span>📍 {p.address}</span>}
                     </div>
 
@@ -795,27 +821,53 @@ export function PipelineAdminClient({
                         </span>
                       </Link>
                     ) : (
-                      <button
-                        type="button"
-                        disabled={busyId === p.id}
-                        onClick={() => void generateInviteLink(p.id)}
-                        className="inline-flex min-h-8 items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-1 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-muted)]"
-                      >
-                        {copiedId === p.id ? (
-                          <>
-                            <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
-                            <span>{isAr ? "تم نسخ الرابط" : "Invite Copied"}</span>
-                          </>
-                        ) : (
-                          <>
-                            <UserPlus
-                              className="h-3.5 w-3.5 text-[var(--accent-primary)]"
-                              aria-hidden="true"
-                            />
-                            <span>{isAr ? "تحويل إلى مطعم" : "Convert to Restaurant"}</span>
-                          </>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={busyId === p.id}
+                          onClick={() => void generateInviteLink(p.id, false)}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-1 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-muted)]"
+                        >
+                          {copiedId === p.id ? (
+                            <>
+                              <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                              <span>{isAr ? "تم نسخ الرابط" : "Invite Copied"}</span>
+                            </>
+                          ) : (
+                            <>
+                              <UserPlus
+                                className="h-3.5 w-3.5 text-[var(--accent-primary)]"
+                                aria-hidden="true"
+                              />
+                              <span>
+                                {p.inviteToken
+                                  ? isAr
+                                    ? "نسخ رابط الدعوة"
+                                    : "Copy Invite"
+                                  : isAr
+                                    ? "تحويل إلى مطعم"
+                                    : "Convert to Restaurant"}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                        {p.inviteToken && (
+                          <button
+                            type="button"
+                            disabled={busyId === p.id}
+                            onClick={() => void generateInviteLink(p.id, true)}
+                            title={
+                              isAr
+                                ? "إصدار رابط جديد لمدة 14 يوماً وإلغاء القديم"
+                                : "Generate a new 14-day invite token and invalidate the previous link"
+                            }
+                            className="inline-flex min-h-8 items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
+                          >
+                            <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                            <span>{isAr ? "تجديد الرابط" : "Regenerate invite"}</span>
+                          </button>
                         )}
-                      </button>
+                      </div>
                     )}
 
                     <button
@@ -836,21 +888,40 @@ export function PipelineAdminClient({
 
                 {inviteUrl && !p.convertedRestaurant && (
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs">
-                    <span className="truncate font-mono text-emerald-900 dark:text-emerald-200">
-                      {inviteUrl}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void navigator.clipboard.writeText(inviteUrl);
-                        setCopiedId(p.id);
-                        setTimeout(() => setCopiedId(null), 2000);
-                      }}
-                      className="inline-flex items-center gap-1 font-semibold text-emerald-800 underline dark:text-emerald-200"
-                    >
-                      <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{isAr ? "نسخ" : "Copy"}</span>
-                    </button>
+                    <div className="min-w-0 flex-1">
+                      <p className="break-all font-mono text-emerald-900 dark:text-emerald-200">
+                        {inviteUrl}
+                      </p>
+                      {p.inviteExpiresAtIso && (
+                        <p className="mt-0.5 text-[11px] text-emerald-800/80 dark:text-emerald-300/80">
+                          {isAr ? "صالح حتى:" : "Expires:"}{" "}
+                          {new Date(p.inviteExpiresAtIso).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(inviteUrl);
+                          setCopiedId(p.id);
+                          setTimeout(() => setCopiedId(null), 2000);
+                        }}
+                        className="inline-flex items-center gap-1 font-semibold text-emerald-800 underline dark:text-emerald-200"
+                      >
+                        <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{isAr ? "نسخ" : "Copy"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === p.id}
+                        onClick={() => void generateInviteLink(p.id, true)}
+                        className="inline-flex items-center gap-1 font-semibold text-emerald-800 underline dark:text-emerald-200"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{isAr ? "تجديد" : "Regenerate"}</span>
+                      </button>
+                    </div>
                   </div>
                 )}
 

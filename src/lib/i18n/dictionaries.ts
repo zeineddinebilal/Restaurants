@@ -93,13 +93,13 @@ export const DICTIONARY = {
     portals: {
       dinerWelcome: "Diner Home",
       dinerSubtitle:
-        "Your personalized UAE dining hub. Onboarding, QR scanning, and personalized menus arrive in Phase 4.",
+        "Your personalized UAE dining hub—scan table QRs, plan group meals, and browse allergen-filtered menus.",
       restaurantWelcome: "Restaurant Dashboard",
       restaurantSubtitle:
-        "Manage branches, AI Menu Builder, verified allergens, QR tables, and live orders (Phase 3–5).",
+        "Manage branches, AI Menu Builder, verified allergens, printable Allergen Matrix, QR tables, and live orders.",
       adminWelcome: "Platform Admin",
       adminSubtitle:
-        "Approve restaurants, inspect the PlatformFee ledger, generate monthly AED invoices, and monitor AI usage (Phase 7).",
+        "Manage the restaurant sales pipeline, approve partners, inspect the PlatformFee ledger, and issue monthly AED invoices.",
       roleBadge: "Signed in role",
     },
     offline: {
@@ -182,13 +182,13 @@ export const DICTIONARY = {
     portals: {
       dinerWelcome: "صفحة الضيف الرئيسية",
       dinerSubtitle:
-        "مركزك الشخصي لتجربة الطعام في الإمارات. إعداد الملف الشخصي ومسح رموز الطاولات في المرحلة ٤.",
+        "مركزك الشخصي لتجربة الطعام في الإمارات — امسح رموز الطاولات، خطط وجباتك مع أصدقائك، وتصفح القوائم الآمنة لك.",
       restaurantWelcome: "لوحة تحكم المطعم",
       restaurantSubtitle:
         "إدارة الفروع، منشئ القوائم بالذكاء الاصطناعي، توثيق مسببات الحساسية، رموز QR والطلبات المباشرة.",
       adminWelcome: "لوحة إدارة المنصة",
       adminSubtitle:
-        "اعتماد المطاعم، سجل رسوم المنصة، الفواتير الشهرية بالدرهم، وسجل استهلاك الذكاء الاصطناعي.",
+        "إدارة خط مبيعات المطاعم، اعتماد الشركاء، سجل رسوم المنصة، الفواتير الشهرية بالدرهم، وسجل الذكاء الاصطناعي.",
       roleBadge: "الصلاحية الحالية",
     },
     offline: {

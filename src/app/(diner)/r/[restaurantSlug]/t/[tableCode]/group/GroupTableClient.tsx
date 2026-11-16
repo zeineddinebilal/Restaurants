@@ -277,7 +277,7 @@ export function GroupTableClient({
           href={`/r/${restaurantSlug}/t/${tableCode}${kQuery}`}
           className="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-[var(--accent-primary)] hover:underline"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className="h-4 w-4 rtl:rotate-180" aria-hidden="true" />
           <span>
             {isAr ? "العودة لقائمة الأطباق" : "Back to Personalized Menu"} ({restaurantName})
           </span>

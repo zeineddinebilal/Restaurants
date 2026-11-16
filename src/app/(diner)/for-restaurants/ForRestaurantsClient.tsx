@@ -265,10 +265,11 @@ export function ForRestaurantsClient({ locale }: { locale: Locale }) {
             )}
 
             <div className="space-y-1">
-              <label className="block text-sm font-medium">
+              <label htmlFor="demo-restaurant-name" className="block text-sm font-medium">
                 {isAr ? "اسم المطعم *" : "Restaurant name *"}
               </label>
               <input
+                id="demo-restaurant-name"
                 required
                 minLength={2}
                 value={restaurantName}
@@ -278,10 +279,13 @@ export function ForRestaurantsClient({ locale }: { locale: Locale }) {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <label className="block text-sm font-medium">{isAr ? "المدينة *" : "City *"}</label>
+                <label htmlFor="demo-city" className="block text-sm font-medium">
+                  {isAr ? "المدينة *" : "City *"}
+                </label>
                 <input
+                  id="demo-city"
                   required
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
@@ -290,10 +294,11 @@ export function ForRestaurantsClient({ locale }: { locale: Locale }) {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-sm font-medium">
+                <label htmlFor="demo-area" className="block text-sm font-medium">
                   {isAr ? "المنطقة / الحي *" : "Area / District *"}
                 </label>
                 <input
+                  id="demo-area"
                   required
                   minLength={2}
                   value={area}
@@ -305,10 +310,11 @@ export function ForRestaurantsClient({ locale }: { locale: Locale }) {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-sm font-medium">
+              <label htmlFor="demo-contact-person" className="block text-sm font-medium">
                 {isAr ? "اسم المسؤول *" : "Your name *"}
               </label>
               <input
+                id="demo-contact-person"
                 required
                 minLength={2}
                 value={contactPerson}
@@ -319,24 +325,28 @@ export function ForRestaurantsClient({ locale }: { locale: Locale }) {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-sm font-medium">
+              <label htmlFor="demo-phone" className="block text-sm font-medium">
                 {isAr ? "رقم الهاتف / واتساب *" : "Phone / WhatsApp *"}
               </label>
               <input
+                id="demo-phone"
+                type="tel"
+                dir="ltr"
                 required
                 minLength={6}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="+971 50 000 0000"
-                className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3.5 py-2 text-sm"
+                className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3.5 py-2 text-start text-sm"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="block text-sm font-medium">
+              <label htmlFor="demo-qr-provider" className="block text-sm font-medium">
                 {isAr ? "مزود QR الحالي (اختياري)" : "Existing table QR (optional)"}
               </label>
               <input
+                id="demo-qr-provider"
                 value={existingQrProvider}
                 onChange={(e) => setExistingQrProvider(e.target.value)}
                 placeholder={
@@ -349,10 +359,11 @@ export function ForRestaurantsClient({ locale }: { locale: Locale }) {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-sm font-medium">
+              <label htmlFor="demo-notes" className="block text-sm font-medium">
                 {isAr ? "ملاحظات إضافية (اختياري)" : "Notes (optional)"}
               </label>
               <input
+                id="demo-notes"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder={

@@ -8,6 +8,10 @@ import { slugifyRestaurantName } from "@/lib/restaurant/access";
 export const PROSPECT_STATUSES = ["GREEN", "GREY", "RED"] as const;
 export type ProspectStatus = (typeof PROSPECT_STATUSES)[number];
 
+export const MAX_NOTES_HISTORY = 200;
+export const PROSPECT_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+export const INVITE_EXPIRED_OR_USED_MESSAGE = "Invite link expired or already used, contact us";
+
 export interface ProspectNoteEntry {
   id: string;
   text: string;
@@ -217,11 +221,11 @@ export function parseProspectsCsv(csvText: string): ParsedProspectRow[] {
 function escapeCsvCell(val: string | number | null | undefined): string {
   if (val === null || val === undefined) return "";
   let str = String(val);
-  // Neutralize spreadsheet formula injection (`=`, `+` non-phone, `@`)
-  if (/^[=@]/.test(str) || (/^[+-]/.test(str) && !/^\+?\d[\d\s()-]{5,}$/.test(str))) {
+  // Neutralize OWASP spreadsheet formula injection (`=`, `+` non-phone, `-` non-phone, `@`, `\t`, `\r`)
+  if (/^[=@\t\r]/.test(str) || (/^[+-]/.test(str) && !/^\+?\d[\d\s()-]{5,}$/.test(str))) {
     str = `'${str}`;
   }
-  if (/[",\r\n]/.test(str)) {
+  if (/[",\r\n\t]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;
@@ -286,9 +290,15 @@ export function exportProspectsToCsv(prospects: readonly Prospect[]): string {
 
 export function parseNotesHistory(raw: unknown): ProspectNoteEntry[] {
   if (!Array.isArray(raw)) return [];
-  return raw.filter((x): x is ProspectNoteEntry =>
-    Boolean(x && typeof x === "object" && "text" in x && typeof x.text === "string"),
-  );
+  return raw
+    .filter((x): x is ProspectNoteEntry =>
+      Boolean(x && typeof x === "object" && "text" in x && typeof x.text === "string"),
+    )
+    .slice(0, MAX_NOTES_HISTORY);
+}
+
+function prependNoteCapped(raw: unknown, entry: ProspectNoteEntry): ProspectNoteEntry[] {
+  return [entry, ...parseNotesHistory(raw)].slice(0, MAX_NOTES_HISTORY);
 }
 
 export async function previewProspectCsvImport(csvText: string, db: PrismaClient = prisma) {
@@ -426,15 +436,14 @@ export async function updateProspectWithAudit(
       return { ok: false as const, status: 404 as const, error: "Prospect not found" };
     }
 
-    const history = parseNotesHistory(existing.notesHistory);
-    if (params.patch.newNote) {
-      history.unshift({
-        id: crypto.randomBytes(6).toString("hex"),
-        text: params.patch.newNote,
-        actorEmail: params.actorEmail,
-        createdAtIso: new Date().toISOString(),
-      });
-    }
+    const history = params.patch.newNote
+      ? prependNoteCapped(existing.notesHistory, {
+          id: crypto.randomBytes(6).toString("hex"),
+          text: params.patch.newNote,
+          actorEmail: params.actorEmail,
+          createdAtIso: new Date().toISOString(),
+        })
+      : parseNotesHistory(existing.notesHistory);
 
     const updated = await tx.prospect.update({
       where: { id: existing.id },
@@ -493,20 +502,38 @@ export async function generateProspectConvertInvite(
     prospectId: string;
     actorUserId: string;
     actorEmail: string;
+    regenerate?: boolean;
+    now?: Date;
   },
   db: PrismaClient = prisma,
 ) {
+  const now = params.now ?? new Date();
   return db.$transaction(async (tx) => {
     const existing = await tx.prospect.findUnique({ where: { id: params.prospectId } });
     if (!existing) {
       return { ok: false as const, status: 404 as const, error: "Prospect not found" };
     }
+    if (existing.convertedRestaurantId) {
+      return {
+        ok: false as const,
+        status: 409 as const,
+        error: "Prospect has already been converted to a partner restaurant.",
+      };
+    }
 
-    const token = existing.inviteToken ?? crypto.randomBytes(16).toString("hex");
+    const isExpired = Boolean(existing.inviteExpiresAt && existing.inviteExpiresAt <= now);
+    const shouldMintNew = Boolean(params.regenerate) || !existing.inviteToken || isExpired;
+    const token = shouldMintNew ? crypto.randomBytes(16).toString("hex") : existing.inviteToken!;
+    const expiresAt =
+      shouldMintNew || !existing.inviteExpiresAt
+        ? new Date(now.getTime() + PROSPECT_INVITE_TTL_MS)
+        : existing.inviteExpiresAt;
+
     const updated = await tx.prospect.update({
       where: { id: existing.id },
       data: {
         inviteToken: token,
+        inviteExpiresAt: expiresAt,
         lastUpdatedById: params.actorUserId,
         lastUpdatedByEmail: params.actorEmail,
       },
@@ -516,36 +543,72 @@ export async function generateProspectConvertInvite(
       data: {
         actorUserId: params.actorUserId,
         actorEmail: params.actorEmail,
-        action: "PROSPECT_CONVERT_INVITE_CREATED",
+        action: params.regenerate
+          ? "PROSPECT_CONVERT_INVITE_REGENERATED"
+          : "PROSPECT_CONVERT_INVITE_CREATED",
         targetType: "Prospect",
         targetId: existing.id,
-        summary: `Generated owner signup invite link for "${existing.name}"`,
+        summary: `${params.regenerate ? "Regenerated" : "Generated"} owner signup invite link for "${existing.name}" (expires ${expiresAt.toISOString()})`,
       },
     });
 
-    return { ok: true as const, inviteToken: updated.inviteToken! };
+    return {
+      ok: true as const,
+      inviteToken: updated.inviteToken!,
+      inviteExpiresAt: updated.inviteExpiresAt!,
+    };
   });
 }
 
 /**
  * Called inside the `/api/auth/register` transaction when an owner signs up through a
  * Sales Pipeline invite link (`?prospectInvite={token}`):
- * - Creates the owner's `Restaurant` + `Branch` + `T1` `DiningTable`
- * - Links `Prospect.convertedRestaurantId = createdRestaurant.id`
- * - Automatically turns `Prospect.status = "GREEN"`!
+ * - Claims the prospect first via atomic CAS (`updateMany` where `convertedRestaurantId: null`
+ *   and `inviteToken` matches and is unexpired), preventing concurrent duplicate conversions.
+ * - Creates the owner's `Restaurant` (`PENDING`) + `Branch` + `T1` `DiningTable`.
+ * - Links `Prospect.convertedRestaurantId = createdRestaurant.id` and auto-turns `Prospect.status = "GREEN"`.
  */
 export async function convertProspectOnOwnerSignupTx(params: {
   tx: Prisma.TransactionClient;
   inviteToken: string;
   ownerUserId: string;
   ownerEmail: string;
+  now?: Date;
 }) {
+  const now = params.now ?? new Date();
+  const trimmedToken = params.inviteToken.trim();
+  if (!trimmedToken) {
+    return { converted: false as const, reason: "EXPIRED_OR_USED" as const };
+  }
+
   const prospect = await params.tx.prospect.findUnique({
-    where: { inviteToken: params.inviteToken.trim() },
+    where: { inviteToken: trimmedToken },
   });
 
-  if (!prospect || prospect.convertedRestaurantId) {
-    return null;
+  if (
+    !prospect ||
+    prospect.convertedRestaurantId ||
+    (prospect.inviteExpiresAt && prospect.inviteExpiresAt <= now)
+  ) {
+    return { converted: false as const, reason: "EXPIRED_OR_USED" as const };
+  }
+
+  // Atomic CAS claim BEFORE creating the restaurant so two concurrent signups cannot create two restaurants
+  const claimed = await params.tx.prospect.updateMany({
+    where: {
+      id: prospect.id,
+      convertedRestaurantId: null,
+      inviteToken: trimmedToken,
+      OR: [{ inviteExpiresAt: null }, { inviteExpiresAt: { gt: now } }],
+    },
+    data: {
+      inviteToken: null,
+      status: "GREEN",
+    },
+  });
+
+  if (claimed.count === 0) {
+    return { converted: false as const, reason: "EXPIRED_OR_USED" as const };
   }
 
   const baseSlug = slugifyRestaurantName(prospect.name);
@@ -586,12 +649,11 @@ export async function convertProspectOnOwnerSignupTx(params: {
     },
   });
 
-  const history = parseNotesHistory(prospect.notesHistory);
-  history.unshift({
+  const history = prependNoteCapped(prospect.notesHistory, {
     id: crypto.randomBytes(6).toString("hex"),
     text: `Owner signed up via invite link (${params.ownerEmail}) — auto-converted to GREEN partner.`,
     actorEmail: "system",
-    createdAtIso: new Date().toISOString(),
+    createdAtIso: now.toISOString(),
   });
 
   await params.tx.prospect.update({
@@ -603,7 +665,7 @@ export async function convertProspectOnOwnerSignupTx(params: {
     },
   });
 
-  return createdRestaurant;
+  return { converted: true as const, restaurant: createdRestaurant };
 }
 
 export const publicDemoRequestSchema = z.object({
@@ -629,21 +691,24 @@ export async function submitWebsiteDemoRequest(rawInput: unknown, db: PrismaClie
   const normalizedKey = buildProspectNormalizedKey(d.restaurantName, d.area);
   const existing = await db.prospect.findUnique({ where: { normalizedKey } });
 
-  const history = parseNotesHistory(existing?.notesHistory);
-  history.unshift({
+  const history = prependNoteCapped(existing?.notesHistory, {
     id: crypto.randomBytes(6).toString("hex"),
-    text: `Website demo request from ${d.contactPerson} (${d.phone})${d.notes ? `: ${d.notes}` : ""}`,
+    text: `Website demo request from ${d.contactPerson} (${d.phone})${d.existingQrProvider ? ` [QR: ${d.existingQrProvider}]` : ""}${d.notes ? `: ${d.notes}` : ""}`,
     actorEmail: "website",
     createdAtIso: new Date().toISOString(),
   });
 
+  // Security: Public form must NEVER overwrite existing non-empty CRM outreach fields or status!
   const saved = existing
     ? await db.prospect.update({
         where: { id: existing.id },
         data: {
-          contactPerson: d.contactPerson,
-          phone: d.phone,
-          existingQrProvider: d.existingQrProvider || existing.existingQrProvider,
+          contactPerson: existing.contactPerson?.trim() ? existing.contactPerson : d.contactPerson,
+          phone: existing.phone?.trim() ? existing.phone : d.phone,
+          existingQrProvider: existing.existingQrProvider?.trim()
+            ? existing.existingQrProvider
+            : d.existingQrProvider || null,
+          whyFitNotes: existing.whyFitNotes?.trim() ? existing.whyFitNotes : d.notes || null,
           notesHistory: history as unknown as Prisma.InputJsonValue,
         },
       })

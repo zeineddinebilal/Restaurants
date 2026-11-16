@@ -22,18 +22,26 @@ export default async function RegisterPage({
 
   const inviteToken = sp.prospectInvite?.trim() || undefined;
   let invitedRestaurantName: string | null = null;
+  let inviteExpiredOrUsed = false;
   if (inviteToken) {
+    const now = new Date();
     const prospect = await prisma.prospect.findUnique({
       where: { inviteToken },
-      select: { name: true, convertedRestaurantId: true },
+      select: { name: true, convertedRestaurantId: true, inviteExpiresAt: true },
     });
-    if (prospect && !prospect.convertedRestaurantId) {
+    if (
+      prospect &&
+      !prospect.convertedRestaurantId &&
+      (!prospect.inviteExpiresAt || prospect.inviteExpiresAt > now)
+    ) {
       invitedRestaurantName = prospect.name;
+    } else {
+      inviteExpiredOrUsed = true;
     }
   }
 
   const initialRole =
-    sp.role === "RESTAURANT_OWNER" || Boolean(invitedRestaurantName) ? "RESTAURANT_OWNER" : "DINER";
+    sp.role === "RESTAURANT_OWNER" || Boolean(inviteToken) ? "RESTAURANT_OWNER" : "DINER";
 
   const safeReturnTo =
     sp.returnTo && sp.returnTo.startsWith("/") && !sp.returnTo.startsWith("//")
@@ -48,6 +56,7 @@ export default async function RegisterPage({
       initialRole={initialRole}
       prospectInvite={invitedRestaurantName ? inviteToken : undefined}
       invitedRestaurantName={invitedRestaurantName}
+      inviteExpiredOrUsed={inviteExpiredOrUsed}
       returnTo={safeReturnTo}
     />
   );

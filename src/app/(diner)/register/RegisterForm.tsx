@@ -13,6 +13,7 @@ export function RegisterForm({
   initialRole,
   prospectInvite,
   invitedRestaurantName,
+  inviteExpiredOrUsed,
   returnTo,
 }: {
   copy: Dictionary["auth"];
@@ -21,6 +22,7 @@ export function RegisterForm({
   initialRole: "DINER" | "RESTAURANT_OWNER";
   prospectInvite?: string;
   invitedRestaurantName?: string | null;
+  inviteExpiredOrUsed?: boolean;
   returnTo?: string;
 }) {
   const router = useRouter();
@@ -50,9 +52,13 @@ export function RegisterForm({
       }),
     });
 
+    const resPayload = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      inviteWarning?: string;
+    };
+
     if (!res.ok) {
-      const payload = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(payload.error || "Registration failed");
+      setError(resPayload.error || "Registration failed");
       setLoading(false);
       return;
     }
@@ -70,7 +76,13 @@ export function RegisterForm({
     }
 
     const effectiveRole = prospectInvite ? "RESTAURANT_OWNER" : role;
-    router.push(returnTo || (effectiveRole === "RESTAURANT_OWNER" ? "/dashboard" : "/home"));
+    const defaultDest =
+      effectiveRole === "RESTAURANT_OWNER"
+        ? resPayload.inviteWarning
+          ? "/dashboard?inviteNotice=expired"
+          : "/dashboard"
+        : "/home";
+    router.push(returnTo || defaultDest);
     router.refresh();
   }
 
@@ -85,6 +97,17 @@ export function RegisterForm({
             {isAr
               ? `دعوة تسجيل شريك نشطة لمطعم "${invitedRestaurantName}" — سيتم إعداد حساب المطعم تلقائياً عند التسجيل.`
               : `Partner onboarding invite active for "${invitedRestaurantName}" — your restaurant workspace will be pre-configured automatically.`}
+          </div>
+        )}
+
+        {inviteExpiredOrUsed && !invitedRestaurantName && (
+          <div
+            role="status"
+            className="mt-4 rounded-2xl border border-amber-500/40 bg-amber-500/15 px-4 py-3 text-xs font-semibold text-amber-900 dark:text-amber-200"
+          >
+            {isAr
+              ? "انتهت صلاحية رابط الدعوة أو تم استخدامه مسبقاً، يرجى التواصل معنا. (يمكنك المتابعة لإنشاء حساب مطعم عادي)."
+              : "Invite link expired or already used, contact us. (You can still continue below to create a normal restaurant owner account.)"}
           </div>
         )}
 

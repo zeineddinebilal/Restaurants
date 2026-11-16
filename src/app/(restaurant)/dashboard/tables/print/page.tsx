@@ -51,7 +51,7 @@ export default async function PrintableQrSheetPage({
           href={`/dashboard/tables?restaurantId=${encodeURIComponent(activeRestaurant.id)}`}
           className="text-sm font-semibold text-[var(--accent-primary)] underline"
         >
-          {locale === "ar" ? "← العودة لإدارة الطاولات" : "← Back to Tables & QR Codes"}
+          {locale === "ar" ? "→ العودة لإدارة الطاولات" : "← Back to Tables & QR Codes"}
         </Link>
         <PrintSheetButton
           label={locale === "ar" ? "طباعة أو حفظ كملف PDF" : "Print / Save as PDF"}

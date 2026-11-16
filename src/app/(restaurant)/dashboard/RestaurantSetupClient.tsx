@@ -54,10 +54,12 @@ export function RestaurantSetupClient({
   locale,
   restaurants,
   active,
+  inviteExpiredNotice,
 }: {
   locale: Locale;
   restaurants: Array<{ id: string; nameEn: string; nameAr: string }>;
   active: SerializedRestaurantSummary | null;
+  inviteExpiredNotice?: boolean;
 }) {
   const router = useRouter();
   const isAr = locale === "ar";
@@ -250,6 +252,17 @@ export function RestaurantSetupClient({
               ? "أدخل اسم المطعم بالعربية والإنجليزية وابدأ بإعداد قائمتك المخصصة."
               : "Set up your bilingual UAE restaurant profile, first branch, and initial table."}
           </p>
+
+          {inviteExpiredNotice && (
+            <div
+              role="status"
+              className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/15 p-3 text-sm font-semibold text-amber-900 dark:text-amber-200"
+            >
+              {isAr
+                ? "انتهت صلاحية رابط الدعوة أو تم استخدامه مسبقاً، يرجى التواصل معنا."
+                : "Invite link expired or already used, contact us."}
+            </div>
+          )}
 
           {feedback && (
             <div

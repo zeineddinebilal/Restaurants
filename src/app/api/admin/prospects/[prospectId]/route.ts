@@ -22,13 +22,19 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
   }
 
-  // Action: Convert to restaurant (generates owner signup invite link)
-  const convertParsed = z.object({ action: z.literal("convert_invite") }).safeParse(body);
+  // Action: Convert to restaurant (generates or regenerates 14-day owner signup invite link)
+  const convertParsed = z
+    .object({
+      action: z.literal("convert_invite"),
+      regenerate: z.boolean().optional(),
+    })
+    .safeParse(body);
   if (convertParsed.success) {
     const res = await generateProspectConvertInvite({
       prospectId,
       actorUserId: authCheck.user.id,
       actorEmail: authCheck.user.email ?? "admin",
+      regenerate: convertParsed.data.regenerate,
     });
     if (!res.ok) {
       return NextResponse.json({ error: res.error }, { status: res.status });
@@ -38,7 +44,11 @@ export async function PATCH(
       req.headers.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
     const origin = process.env.NEXT_PUBLIC_APP_URL?.trim() || `${proto}://${host}`;
     const inviteUrl = `${origin.replace(/\/+$/, "")}/register?role=RESTAURANT_OWNER&prospectInvite=${encodeURIComponent(res.inviteToken)}`;
-    return NextResponse.json({ inviteToken: res.inviteToken, inviteUrl });
+    return NextResponse.json({
+      inviteToken: res.inviteToken,
+      inviteUrl,
+      inviteExpiresAt: res.inviteExpiresAt.toISOString(),
+    });
   }
 
   const parsed = updateProspectPatchSchema.safeParse(body);

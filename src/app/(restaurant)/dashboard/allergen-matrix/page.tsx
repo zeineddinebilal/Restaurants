@@ -87,7 +87,7 @@ export default async function PrintableAllergenMatrixPage({
             href={`/dashboard/menu?restaurantId=${encodeURIComponent(activeRestaurant.id)}`}
             className="text-sm font-semibold text-[var(--accent-primary)] underline"
           >
-            {isAr ? "← العودة لمنشئ القائمة" : "← Back to Menu Builder"}
+            {isAr ? "→ العودة لمنشئ القائمة" : "← Back to Menu Builder"}
           </Link>
 
           {restaurants.length > 1 &&
@@ -155,28 +155,31 @@ export default async function PrintableAllergenMatrixPage({
               : "No published dishes yet. Publish dishes in the Menu Builder to populate this matrix."}
           </p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full border-collapse text-[11px]">
+          <div className="mt-4 overflow-x-auto print:overflow-visible">
+            <table className="w-full border-collapse text-[11px] print:text-[9px]">
               <thead>
                 <tr className="border-b-2 border-[#1f1916] bg-neutral-100 text-neutral-900">
-                  <th className="border border-neutral-300 px-2 py-2 text-start font-bold">
+                  <th className="border border-neutral-300 px-2 py-2 text-start font-bold print:px-1 print:py-1">
                     {isAr ? "الطبق" : "Dish"}
                   </th>
-                  <th className="border border-neutral-300 px-1.5 py-2 text-center font-bold">
-                    kcal
+                  <th className="border border-neutral-300 px-1.5 py-2 text-center font-bold print:px-1 print:py-1">
+                    {isAr ? "سعرات" : "kcal"}
                   </th>
                   {MATRIX_14_ALLERGENS.map((alg) => (
                     <th
                       key={alg.key}
-                      className="border border-neutral-300 px-1 py-2 text-center font-bold"
+                      className="border border-neutral-300 px-1 py-2 text-center font-bold print:px-0.5 print:py-1"
                     >
-                      <div>{alg.en}</div>
-                      <div className="text-[10px] font-medium text-neutral-600" dir="rtl">
-                        {alg.ar}
+                      <div>{isAr ? alg.ar : alg.en}</div>
+                      <div
+                        className="text-[10px] font-medium text-neutral-600 print:text-[8px]"
+                        dir={isAr ? "ltr" : "rtl"}
+                      >
+                        {isAr ? alg.en : alg.ar}
                       </div>
                     </th>
                   ))}
-                  <th className="border border-neutral-300 px-2 py-2 text-start font-bold">
+                  <th className="border border-neutral-300 px-2 py-2 text-start font-bold print:px-1 print:py-1">
                     {isAr ? "حالة التوثيق" : "Verification"}
                   </th>
                 </tr>
@@ -184,16 +187,21 @@ export default async function PrintableAllergenMatrixPage({
               <tbody>
                 {publishedRows.map((row) => (
                   <tr key={row.id} className="break-inside-avoid border-b border-neutral-200">
-                    <td className="border border-neutral-300 px-2 py-1.5">
-                      <div className="font-bold text-neutral-900">{row.nameEn}</div>
-                      <div className="text-[10px] text-neutral-600" dir="rtl">
-                        {row.nameAr}
+                    <td className="border border-neutral-300 px-2 py-1.5 print:px-1 print:py-1">
+                      <div className="font-bold text-neutral-900">
+                        {isAr ? row.nameAr : row.nameEn}
                       </div>
-                      <div className="text-[10px] text-neutral-500">
+                      <div
+                        className="text-[10px] text-neutral-600 print:text-[8px]"
+                        dir={isAr ? "ltr" : "rtl"}
+                      >
+                        {isAr ? row.nameEn : row.nameAr}
+                      </div>
+                      <div className="text-[10px] text-neutral-500 print:text-[8px]">
                         {isAr ? row.categoryAr : row.categoryEn}
                       </div>
                     </td>
-                    <td className="border border-neutral-300 px-1.5 py-1.5 text-center font-mono text-neutral-700">
+                    <td className="border border-neutral-300 px-1.5 py-1.5 text-center font-mono text-neutral-700 print:px-1 print:py-1">
                       {row.caloriesKcal != null ? row.caloriesKcal : "—"}
                     </td>
                     {MATRIX_14_ALLERGENS.map((alg) => {
@@ -201,7 +209,7 @@ export default async function PrintableAllergenMatrixPage({
                       return (
                         <td
                           key={alg.key}
-                          className={`border border-neutral-300 px-1 py-1.5 text-center font-bold ${
+                          className={`border border-neutral-300 px-1 py-1.5 text-center font-bold print:px-0.5 print:py-1 ${
                             hasAllergen
                               ? "bg-amber-100 text-amber-950"
                               : !row.allergenDataProvided
@@ -213,7 +221,7 @@ export default async function PrintableAllergenMatrixPage({
                         </td>
                       );
                     })}
-                    <td className="border border-neutral-300 px-2 py-1.5">
+                    <td className="border border-neutral-300 px-2 py-1.5 print:px-1 print:py-1">
                       {row.verificationStatus === "RESTAURANT_VERIFIED" ? (
                         <div>
                           <span className="font-bold text-emerald-800">

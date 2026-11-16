@@ -585,12 +585,12 @@ model MealPlanMember {
 }
 
 model Prospect {
-  id                    String   @id @default(cuid())
-  normalizedKey         String   @unique
+  id                    String    @id @default(cuid())
+  normalizedKey         String    @unique
   name                  String
-  area                  String   @default("")
+  area                  String    @default("")
   district              String?
-  city                  String   @default("Dubai")
+  city                  String    @default("Dubai")
   cuisine               String?
   priceTier             String?
   address               String?
@@ -601,19 +601,20 @@ model Prospect {
   existingQrProvider    String?
   whyFitNotes           String?
   top30Rank             Int?
-  status                String   @default("GREY")
-  source                String   @default("admin")
+  status                String    @default("GREY")
+  source                String    @default("admin")
   contactPerson         String?
   dateApproached        String?
   outcomeNotes          String?
   rewardOrOffer         String?
-  notesHistory          Json     @default("[]")
-  inviteToken           String?  @unique
-  convertedRestaurantId String?  @unique
+  notesHistory          Json      @default("[]")
+  inviteToken           String?   @unique
+  inviteExpiresAt       DateTime?
+  convertedRestaurantId String?   @unique
   lastUpdatedById       String?
   lastUpdatedByEmail    String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   convertedRestaurant Restaurant? @relation("ConvertedProspect", fields: [convertedRestaurantId], references: [id], onDelete: SetNull)
 
