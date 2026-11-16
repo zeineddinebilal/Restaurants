@@ -1,25 +1,66 @@
+import {
+  RestaurantSetupClient,
+  type SerializedRestaurantSummary,
+} from "@/app/(restaurant)/dashboard/RestaurantSetupClient";
 import { requirePageRole } from "@/lib/auth/rbac";
 import { getI18nContext } from "@/lib/i18n/server";
+import { loadManagedRestaurants } from "@/lib/restaurant/loader";
 
-export default async function RestaurantDashboardPage() {
-  const [user, { dict }] = await Promise.all([
+export default async function RestaurantDashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ restaurantId?: string }>;
+}) {
+  const [user, { locale }, sp] = await Promise.all([
     requirePageRole(["RESTAURANT_OWNER", "ADMIN"]),
     getI18nContext(),
+    searchParams,
   ]);
 
+  const { restaurants, activeRestaurant } = await loadManagedRestaurants(user, sp.restaurantId);
+
+  let serializedActive: SerializedRestaurantSummary | null = null;
+  if (activeRestaurant) {
+    const allItems = activeRestaurant.categories.flatMap((c) => c.items);
+    serializedActive = {
+      id: activeRestaurant.id,
+      slug: activeRestaurant.slug,
+      nameEn: activeRestaurant.nameEn,
+      nameAr: activeRestaurant.nameAr,
+      cuisine: activeRestaurant.cuisine,
+      descriptionEn: activeRestaurant.descriptionEn,
+      descriptionAr: activeRestaurant.descriptionAr,
+      status: activeRestaurant.status,
+      branches: activeRestaurant.branches.map((b) => ({
+        id: b.id,
+        nameEn: b.nameEn,
+        nameAr: b.nameAr,
+        city: b.city,
+        addressEn: b.addressEn,
+        addressAr: b.addressAr,
+        isActive: b.isActive,
+      })),
+      members: activeRestaurant.members.map((m) => ({
+        id: m.id,
+        branchId: m.branchId,
+        isActive: m.isActive,
+        user: m.user,
+      })),
+      stats: {
+        totalDishes: allItems.length,
+        verifiedDishes: allItems.filter((i) => i.verificationStatus === "RESTAURANT_VERIFIED")
+          .length,
+        publishedDishes: allItems.filter((i) => i.isPublished).length,
+        activeTables: activeRestaurant.tables.filter((t) => t.isActive).length,
+      },
+    };
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-10 sm:px-6">
-      <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-8 shadow-sm">
-        <span className="inline-flex rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-primary)]">
-          {dict.portals.roleBadge}: {user.role}
-        </span>
-        <h1 className="mt-4 text-3xl font-bold text-[var(--text-primary)]">
-          {dict.portals.restaurantWelcome}
-        </h1>
-        <p className="mt-2 text-base text-[var(--text-secondary)]">
-          {dict.portals.restaurantSubtitle}
-        </p>
-      </div>
-    </div>
+    <RestaurantSetupClient
+      locale={locale}
+      restaurants={restaurants.map((r) => ({ id: r.id, nameEn: r.nameEn, nameAr: r.nameAr }))}
+      active={serializedActive}
+    />
   );
 }

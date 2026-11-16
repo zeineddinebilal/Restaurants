@@ -13,7 +13,7 @@ Restaurants pay **`min(AED 1.00, 10% × order subtotal)`** (round half up) only 
 
 - [x] **Phase 1: Plan** (`SPEC.md`, `PLAN.md`)
 - [x] **Phase 2: Foundation** (Next.js 16 + TypeScript, Tailwind v4, Prisma + PostgreSQL schema & initial migration, exact integer-fils money & fee math, Auth.js credentials + optional Google OAuth + RBAC + signed Guest cookies, EN/AR i18n with full RTL + dark mode, installable PWA manifest + service worker + offline fallback + iOS guidance, S3/dev-local storage guard, Gemini AI foundation with graceful missing-key fallback, `/api/health`, `render.yaml`)
-- [ ] **Phase 3: Restaurant side**
+- [x] **Phase 3: Restaurant side** (Restaurant setup, branches & staff management, Menu Builder with AI Menu Ingestion + Dish Tagging agents, editable review table, strict safety verification rules & bulk verify/publish, tables & printable branded QR sheet, 42-dish bilingual demo menu seed)
 - [ ] **Phase 4: Diner side**
 - [ ] **Phase 5: Ordering**
 - [ ] **Phase 6: AI extras**

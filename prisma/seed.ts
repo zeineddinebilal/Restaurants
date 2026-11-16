@@ -1,5 +1,6 @@
 import { PrismaClient, Role, SpiceLevel } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { DEMO_LEBANESE_CATEGORIES } from "../src/lib/demo/lebanese-menu-data";
 
 const prisma = new PrismaClient();
 
@@ -33,10 +34,10 @@ async function main() {
 
   const passwordHash = await bcrypt.hash(demoPassword, 10);
 
-  // Admin, Owner, Staff (@example.com per safety/privacy rules)
+  // Admin, Owner, Staff (@example.com)
   await prisma.user.upsert({
     where: { email: "admin@example.com" },
-    update: { passwordHash, role: Role.ADMIN, name: "Platform Admin" },
+    update: { passwordHash, role: Role.ADMIN, name: "Platform Admin", isActive: true },
     create: {
       email: "admin@example.com",
       passwordHash,
@@ -48,7 +49,12 @@ async function main() {
 
   const owner = await prisma.user.upsert({
     where: { email: "owner@example.com" },
-    update: { passwordHash, role: Role.RESTAURANT_OWNER, name: "Layla Mansour (Owner)" },
+    update: {
+      passwordHash,
+      role: Role.RESTAURANT_OWNER,
+      name: "Layla Mansour (Owner)",
+      isActive: true,
+    },
     create: {
       email: "owner@example.com",
       passwordHash,
@@ -60,7 +66,12 @@ async function main() {
 
   const staff = await prisma.user.upsert({
     where: { email: "staff@example.com" },
-    update: { passwordHash, role: Role.RESTAURANT_STAFF, name: "Karim Haddad (Staff)" },
+    update: {
+      passwordHash,
+      role: Role.RESTAURANT_STAFF,
+      name: "Karim Haddad (Staff)",
+      isActive: true,
+    },
     create: {
       email: "staff@example.com",
       passwordHash,
@@ -73,7 +84,7 @@ async function main() {
   // Demo Diners: Claude (Vegetarian), Bilal (Lactose intolerant), James (Meal budget AED 40.00)
   const claude = await prisma.user.upsert({
     where: { email: "claude@example.com" },
-    update: { passwordHash, role: Role.DINER, name: "Claude" },
+    update: { passwordHash, role: Role.DINER, name: "Claude", isActive: true },
     create: {
       email: "claude@example.com",
       passwordHash,
@@ -107,7 +118,7 @@ async function main() {
 
   const bilal = await prisma.user.upsert({
     where: { email: "bilal@example.com" },
-    update: { passwordHash, role: Role.DINER, name: "Bilal" },
+    update: { passwordHash, role: Role.DINER, name: "Bilal", isActive: true },
     create: {
       email: "bilal@example.com",
       passwordHash,
@@ -141,7 +152,7 @@ async function main() {
 
   const james = await prisma.user.upsert({
     where: { email: "james@example.com" },
-    update: { passwordHash, role: Role.DINER, name: "James" },
+    update: { passwordHash, role: Role.DINER, name: "James", isActive: true },
     create: {
       email: "james@example.com",
       passwordHash,
@@ -173,7 +184,7 @@ async function main() {
     },
   });
 
-  // Fictional Demo Restaurant shell (full ~40-dish menu added in Phase 3/4)
+  // Fictional Demo Restaurant + Branches + Tables + ~40-Dish Menu
   const demoRestaurant = await prisma.restaurant.upsert({
     where: { slug: "demo-lebanese-kitchen" },
     update: {
@@ -203,6 +214,41 @@ async function main() {
     },
   });
 
+  // Branches (idempotent lookup by nameEn)
+  let marinaBranch = await prisma.branch.findFirst({
+    where: { restaurantId: demoRestaurant.id, nameEn: "Dubai Marina Walk" },
+  });
+  if (!marinaBranch) {
+    marinaBranch = await prisma.branch.create({
+      data: {
+        restaurantId: demoRestaurant.id,
+        nameEn: "Dubai Marina Walk",
+        nameAr: "ممشى دبي مارينا",
+        addressEn: "Promenade Level, Dubai Marina, Dubai",
+        addressAr: "ممشى دبي مارينا، دبي",
+        city: "Dubai",
+        isActive: true,
+      },
+    });
+  }
+
+  const cornicheBranch = await prisma.branch.findFirst({
+    where: { restaurantId: demoRestaurant.id, nameEn: "Abu Dhabi Corniche" },
+  });
+  if (!cornicheBranch) {
+    await prisma.branch.create({
+      data: {
+        restaurantId: demoRestaurant.id,
+        nameEn: "Abu Dhabi Corniche",
+        nameAr: "كورنيش أبوظبي",
+        addressEn: "West Corniche Road, Abu Dhabi",
+        addressAr: "طريق الكورنيش الغربي، أبوظبي",
+        city: "Abu Dhabi",
+        isActive: true,
+      },
+    });
+  }
+
   await prisma.restaurantMember.upsert({
     where: {
       restaurantId_userId: {
@@ -210,15 +256,118 @@ async function main() {
         userId: staff.id,
       },
     },
-    update: { role: Role.RESTAURANT_STAFF },
+    update: { role: Role.RESTAURANT_STAFF, branchId: marinaBranch.id, isActive: true },
     create: {
       restaurantId: demoRestaurant.id,
+      branchId: marinaBranch.id,
       userId: staff.id,
       role: Role.RESTAURANT_STAFF,
+      isActive: true,
     },
   });
 
-  console.log("✔ Seeded demo users (@example.com) and Demo Lebanese Kitchen shell.");
+  // 5 Demo Tables (T1 - T5)
+  const demoTables = [
+    { code: "T1", name: "Table 1 — Marina Terrace", capacity: 4 },
+    { code: "T2", name: "Table 2 — Olive Courtyard", capacity: 2 },
+    { code: "T3", name: "Table 3 — Family Majlis", capacity: 6 },
+    { code: "T4", name: "Table 4 — Fountain View", capacity: 4 },
+    { code: "T5", name: "Table 5 — Indoor Dining", capacity: 4 },
+  ];
+  for (const t of demoTables) {
+    await prisma.diningTable.upsert({
+      where: {
+        restaurantId_tableCode: {
+          restaurantId: demoRestaurant.id,
+          tableCode: t.code,
+        },
+      },
+      update: {
+        displayName: t.name,
+        capacity: t.capacity,
+        branchId: marinaBranch.id,
+        isActive: true,
+      },
+      create: {
+        restaurantId: demoRestaurant.id,
+        branchId: marinaBranch.id,
+        tableCode: t.code,
+        displayName: t.name,
+        capacity: t.capacity,
+        isActive: true,
+      },
+    });
+  }
+
+  // Seed the ~40-dish demo menu idempotently if no categories exist yet
+  const existingItemCount = await prisma.menuItem.count({
+    where: { restaurantId: demoRestaurant.id },
+  });
+
+  if (existingItemCount === 0) {
+    const now = new Date();
+    let seededCount = 0;
+
+    for (const cat of DEMO_LEBANESE_CATEGORIES) {
+      const createdCat = await prisma.menuCategory.create({
+        data: {
+          restaurantId: demoRestaurant.id,
+          nameEn: cat.nameEn,
+          nameAr: cat.nameAr,
+          sortOrder: cat.sortOrder,
+        },
+      });
+
+      for (const dish of cat.items) {
+        const isVerified = dish.verificationStatus === "RESTAURANT_VERIFIED";
+        await prisma.menuItem.create({
+          data: {
+            restaurantId: demoRestaurant.id,
+            categoryId: createdCat.id,
+            nameEn: dish.nameEn,
+            nameAr: dish.nameAr,
+            descriptionEn: dish.descriptionEn,
+            descriptionAr: dish.descriptionAr,
+            priceAed: dish.priceAed,
+            portionSize: dish.portionSize,
+            ingredientsEn: dish.ingredientsEn,
+            ingredientsAr: dish.ingredientsAr,
+            dietTags: dish.dietTags,
+            allergens: dish.allergens,
+            allergenDataProvided: dish.allergenDataProvided,
+            spiceLevel: dish.spiceLevel,
+            meatType: dish.meatType,
+            verificationStatus: dish.verificationStatus,
+            verifiedAt: isVerified ? now : null,
+            verifiedById: isVerified ? owner.id : null,
+            isAvailable: true,
+            isPopular: Boolean(dish.isPopular),
+            isPublished: true,
+            modifiers: dish.modifiers?.length
+              ? {
+                  create: dish.modifiers.map((mod) => ({
+                    nameEn: mod.nameEn,
+                    nameAr: mod.nameAr,
+                    priceDeltaAed: mod.priceDeltaAed,
+                    removesAllergens: mod.removesAllergens,
+                    addsDietTags: mod.addsDietTags,
+                    verificationStatus: mod.verificationStatus,
+                  })),
+                }
+              : undefined,
+          },
+        });
+        seededCount++;
+      }
+    }
+    console.log(
+      `✔ Seeded ${seededCount} dishes across ${DEMO_LEBANESE_CATEGORIES.length} categories.`,
+    );
+  } else {
+    console.log(
+      `ℹ Demo menu already has ${existingItemCount} items; skipping duplicate dish insert.`,
+    );
+  }
 }
 
 main()

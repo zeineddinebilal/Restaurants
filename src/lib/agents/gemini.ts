@@ -63,7 +63,7 @@ export async function runStructuredAgent<T>(params: {
   agentName: string;
   systemInstruction: string;
   contents: Parameters<GoogleGenAI["models"]["generateContent"]>[0]["contents"];
-  schema: z.ZodType<T>;
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   restaurantId?: string;
   userId?: string;
 }): Promise<AgentCallResult<T>> {
