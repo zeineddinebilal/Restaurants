@@ -22,7 +22,7 @@ We follow `SPEC.md` with strict domain isolation so auth, money math, the determ
   - Dish photos use an S3-compatible bucket (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_PUBLIC_URL`).
   - **Dev-only local fallback:** `public/uploads` is used **only** when `NODE_ENV === "development"` and S3 env vars are absent. In `NODE_ENV === "production"`, if S3 is not configured, photo upload is cleanly disabled with `"Photo storage is not configured"` rather than writing to Render's ephemeral disk.
 - **Testing:**
-  - **Vitest** for unit tests (money/fee edge cases, deterministic hard filter, missing allergen data handling, no-restriction badge suppression, meal-level remaining budget ranking, and the Claude/Bilal/James scenario).
+  - **Node test runner (`tsx --test`)** for unit & PGlite PostgreSQL DDL tests (money/fee edge cases, deterministic hard filter, missing allergen data handling, no-restriction badge suppression, meal-level remaining budget ranking, and the Claude/Bilal/James scenario).
   - **Playwright** for end-to-end tests (QR scan -> personalized menu -> group table order -> staff acceptance -> fee ledger).
 
 ### Directory Structure
