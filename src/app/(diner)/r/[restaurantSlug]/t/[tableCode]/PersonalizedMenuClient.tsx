@@ -19,6 +19,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { MenuAssistantDrawer } from "@/components/diner/MenuAssistantDrawer";
 import type { SerializedDinerProfile } from "@/lib/diner/profile";
 import {
   type EngineDinerProfile,
@@ -633,6 +634,15 @@ export function PersonalizedMenuClient({
           </div>
         </section>
       )}
+
+      {/* Grounded Menu Assistant Chat (Agent #6) */}
+      <MenuAssistantDrawer
+        locale={locale}
+        restaurantSlug={restaurant.slug}
+        tableCode={table.tableCode}
+        activeProfile={activeProfile}
+        currentCartTotalFils={activePersonaCartTotalFils}
+      />
 
       {/* Guest Mode Inline Quick Profile Builder */}
       {showQuickGuestEditor && persona === "self" && (

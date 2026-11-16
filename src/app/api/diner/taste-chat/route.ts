@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { checkDailyAiQuota } from "@/lib/agents/guardrails";
 import { runTasteProfileAgent } from "@/lib/agents/taste-profile";
+import { getVerifiedGuestToken } from "@/lib/auth/guest";
 import { getLiveAuthenticatedUser } from "@/lib/auth/rbac";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
@@ -35,7 +37,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Please enter a valid message." }, { status: 400 });
   }
 
-  const liveUser = await getLiveAuthenticatedUser();
+  const [liveUser, guestToken] = await Promise.all([
+    getLiveAuthenticatedUser(),
+    getVerifiedGuestToken(),
+  ]);
+  const callerKey = liveUser
+    ? `user:${liveUser.id}`
+    : guestToken
+      ? `guest:${guestToken}`
+      : `ip:${clientIp}`;
+  const quota = checkDailyAiQuota({ callerKey });
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quota.reason }, { status: 429 });
+  }
+
   const result = await runTasteProfileAgent({
     message: parsed.data.message,
     locale: parsed.data.locale,

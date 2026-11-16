@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runDishTaggingAgent } from "@/lib/agents/dish-tagging";
+import { checkDailyAiQuota } from "@/lib/agents/guardrails";
 import { ALLOWED_INGESTION_MIMES, runMenuIngestionAgent } from "@/lib/agents/menu-ingestion";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { requireRestaurantOwnerApi } from "@/lib/restaurant/access";
@@ -9,8 +10,8 @@ const jsonPayloadSchema = z.object({
   pastedText: z.string().trim().min(1).max(40_000),
 });
 
-const MAX_FILES = 5;
-const MAX_TOTAL_BYTES = 15 * 1024 * 1024; // 15 MB total in-memory limit
+const MAX_FILES = 4;
+const MAX_TOTAL_BYTES = 5 * 1024 * 1024; // 5 MB max total upload size
 
 export async function POST(
   req: NextRequest,
@@ -36,6 +37,14 @@ export async function POST(
       { error: "AI ingestion rate limit reached. Please wait a few minutes and try again." },
       { status: 429 },
     );
+  }
+
+  const quota = checkDailyAiQuota({
+    callerKey: `user:${access.user.id}`,
+    restaurantId,
+  });
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quota.reason }, { status: 429 });
   }
 
   let pastedText = "";
@@ -71,7 +80,7 @@ export async function POST(
         totalBytes += entry.size;
         if (totalBytes > MAX_TOTAL_BYTES) {
           return NextResponse.json(
-            { error: "Total uploaded file size exceeds 15 MB." },
+            { error: "Total uploaded file size exceeds 5 MB." },
             { status: 400 },
           );
         }

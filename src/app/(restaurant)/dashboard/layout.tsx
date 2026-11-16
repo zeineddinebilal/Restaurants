@@ -1,4 +1,4 @@
-import { BookOpenCheck, ClipboardList, QrCode, Settings2 } from "lucide-react";
+import { BarChart3, BookOpenCheck, ClipboardList, QrCode, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { requirePageRole } from "@/lib/auth/rbac";
 import { getI18nContext } from "@/lib/i18n/server";
@@ -20,12 +20,14 @@ export default async function RestaurantDashboardLayout({
           setup: "بيانات المطعم والفروع",
           menu: "منشئ القائمة والتوثيق",
           tables: "الطاولات ورموز QR",
+          analytics: "التحليلات والرؤى",
           orders: "شاشة الطلبات المباشرة",
         }
       : {
           setup: "Setup & Branches",
           menu: "Menu Builder & Verify",
           tables: "Tables & QR Codes",
+          analytics: "Analytics & Insights",
           orders: "Live Orders",
         };
 
@@ -58,6 +60,13 @@ export default async function RestaurantDashboardLayout({
               >
                 <QrCode className="h-4 w-4 text-[var(--accent-primary)]" aria-hidden="true" />
                 <span>{labels.tables}</span>
+              </Link>
+              <Link
+                href="/dashboard/analytics"
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-muted)]"
+              >
+                <BarChart3 className="h-4 w-4 text-[var(--accent-primary)]" aria-hidden="true" />
+                <span>{labels.analytics}</span>
               </Link>
             </>
           )}

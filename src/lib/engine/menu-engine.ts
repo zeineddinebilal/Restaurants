@@ -388,7 +388,7 @@ export function evaluatePersonalizedMenu(params: {
       score -= 25;
     }
 
-    const searchableText = [dish.nameEn, dish.descriptionEn ?? "", ...dish.ingredientsEn]
+    const searchableText = [dish.nameEn, dish.descriptionEn ?? "", ...(dish.ingredientsEn ?? [])]
       .join(" ")
       .toLowerCase();
 

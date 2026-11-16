@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type AgentCallResult, runStructuredAgent } from "@/lib/agents/gemini";
+import { wrapUntrustedText } from "@/lib/agents/guardrails";
 import { aedToFils, filsToAedString } from "@/lib/money";
 
 const rawModifierSchema = z.object({
@@ -146,7 +147,7 @@ Rules:
 
   if (hasText) {
     parts.push({
-      text: `Menu text:\n${params.pastedText!.trim()}`,
+      text: `Extract dishes from the following untrusted menu text:\n${wrapUntrustedText(params.pastedText!.trim(), 30_000)}`,
     });
   } else {
     parts.push({

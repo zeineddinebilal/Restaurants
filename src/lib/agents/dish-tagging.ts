@@ -1,6 +1,7 @@
 import type { MeatType, SpiceLevel } from "@prisma/client";
 import { z } from "zod";
 import { type AgentCallResult, runStructuredAgent } from "@/lib/agents/gemini";
+import { wrapUntrustedText } from "@/lib/agents/guardrails";
 import { normalizeAiPriceToAed } from "@/lib/agents/menu-ingestion";
 import {
   CANONICAL_ALLERGENS,
@@ -127,7 +128,7 @@ Safety rules:
   const rawResult = await runStructuredAgent({
     agentName: "dishTaggingAgent",
     systemInstruction,
-    contents: JSON.stringify({ dishes: payload }),
+    contents: `UNTRUSTED_MENU_DISHES_JSON:\n${wrapUntrustedText(JSON.stringify({ dishes: payload }), 24_000)}`,
     schema: rawTaggingOutputSchema,
     restaurantId: params.restaurantId,
     userId: params.userId,
@@ -137,23 +138,45 @@ Safety rules:
     return rawResult;
   }
 
-  const items: DishTagSuggestion[] = rawResult.data.items.map((entry) => ({
-    index: entry.index,
-    dietTags: normalizeDietTagList(entry.dietTags),
-    allergens: normalizeAllergenList(entry.allergens),
-    spiceLevel: entry.spiceLevel,
-    meatType: entry.meatType,
-    aiConfidence: entry.confidence.toFixed(3),
-    verificationStatus: "AI_SUGGESTED",
-    suggestedModifiers: entry.suggestedModifiers.map((mod) => ({
-      nameEn: mod.nameEn,
-      nameAr: mod.nameAr,
-      priceDeltaAed: normalizeAiPriceToAed(mod.priceDeltaAed, "0.00"),
-      removesAllergens: normalizeAllergenList(mod.removesAllergens),
-      addsDietTags: normalizeDietTagList(mod.addsDietTags),
+  const items: DishTagSuggestion[] = rawResult.data.items.map((entry) => {
+    const allergens = normalizeAllergenList(entry.allergens);
+    const allergenSet = new Set(allergens);
+    let dietTags = normalizeDietTagList(entry.dietTags);
+
+    if (
+      entry.meatType !== "NONE" ||
+      allergenSet.has("fish") ||
+      allergenSet.has("crustaceans") ||
+      allergenSet.has("molluscs") ||
+      allergenSet.has("shellfish")
+    ) {
+      dietTags = dietTags.filter((d) => d !== "vegetarian" && d !== "vegan");
+    }
+    if (allergenSet.has("milk") || allergenSet.has("eggs")) {
+      dietTags = dietTags.filter((d) => d !== "vegan");
+    }
+    if (entry.meatType !== "NONE" && entry.meatType !== "FISH" && entry.meatType !== "SHELLFISH") {
+      dietTags = dietTags.filter((d) => d !== "pescatarian");
+    }
+
+    return {
+      index: entry.index,
+      dietTags,
+      allergens,
+      spiceLevel: entry.spiceLevel,
+      meatType: entry.meatType,
+      aiConfidence: entry.confidence.toFixed(3),
       verificationStatus: "AI_SUGGESTED",
-    })),
-  }));
+      suggestedModifiers: entry.suggestedModifiers.map((mod) => ({
+        nameEn: mod.nameEn,
+        nameAr: mod.nameAr,
+        priceDeltaAed: normalizeAiPriceToAed(mod.priceDeltaAed, "0.00"),
+        removesAllergens: normalizeAllergenList(mod.removesAllergens),
+        addsDietTags: normalizeDietTagList(mod.addsDietTags),
+        verificationStatus: "AI_SUGGESTED",
+      })),
+    };
+  });
 
   return {
     ...rawResult,

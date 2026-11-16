@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runDishTaggingAgent } from "@/lib/agents/dish-tagging";
+import { checkDailyAiQuota } from "@/lib/agents/guardrails";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { requireRestaurantOwnerApi } from "@/lib/restaurant/access";
 
@@ -42,6 +43,14 @@ export async function POST(
       { error: "AI tagging rate limit reached. Please wait a few minutes and try again." },
       { status: 429 },
     );
+  }
+
+  const quota = checkDailyAiQuota({
+    callerKey: `user:${access.user.id}`,
+    restaurantId,
+  });
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quota.reason }, { status: 429 });
   }
 
   let body: unknown;

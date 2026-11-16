@@ -1,8 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
+import { PROMPT_INJECTION_SYSTEM_GUARDRAIL } from "@/lib/agents/guardrails";
 import { prisma } from "@/lib/db";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
+export const DEFAULT_AI_TIMEOUT_MS = 25_000;
 
 export function getGeminiConfig(): {
   configured: boolean;
@@ -56,6 +58,8 @@ async function recordAiLog(entry: {
 /**
  * Shared Gemini runner for all 8 platform AI agents.
  * - Handles missing GEMINI_API_KEY gracefully ("AI not configured")
+ * - Prepends prompt-injection isolation instructions on every call
+ * - Enforces a short request timeout (`timeoutMs`, default 25s)
  * - Validates structured JSON output with Zod before returning
  * - Logs latency & token usage to AiUsageLog
  */
@@ -66,6 +70,7 @@ export async function runStructuredAgent<T>(params: {
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   restaurantId?: string;
   userId?: string;
+  timeoutMs?: number;
 }): Promise<AgentCallResult<T>> {
   const cfg = getGeminiConfig();
   if (!cfg.configured || !cfg.apiKey) {
@@ -77,14 +82,17 @@ export async function runStructuredAgent<T>(params: {
   }
 
   const startedAt = Date.now();
+  const timeoutMs = params.timeoutMs ?? DEFAULT_AI_TIMEOUT_MS;
+
   try {
     const ai = new GoogleGenAI({ apiKey: cfg.apiKey });
     const response = await ai.models.generateContent({
       model: cfg.model,
       contents: params.contents,
       config: {
-        systemInstruction: params.systemInstruction,
+        systemInstruction: `${PROMPT_INJECTION_SYSTEM_GUARDRAIL}\n\n${params.systemInstruction}`,
         responseMimeType: "application/json",
+        abortSignal: AbortSignal.timeout(timeoutMs),
       },
     });
 

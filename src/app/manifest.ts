@@ -26,5 +26,19 @@ export default function manifest(): MetadataRoute.Manifest {
         purpose: "maskable",
       },
     ],
+    share_target: {
+      action: "/api/diner/external-scan/share",
+      method: "POST",
+      enctype: "multipart/form-data",
+      params: {
+        title: "title",
+        files: [
+          {
+            name: "files",
+            accept: ["image/jpeg", "image/png", "image/webp"],
+          },
+        ],
+      },
+    },
   };
 }

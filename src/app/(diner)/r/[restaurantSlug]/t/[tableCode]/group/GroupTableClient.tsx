@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowLeft, Plus, Receipt, Send, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Plus, Receipt, Send, Sparkles, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import type { GroupTableAgentOutput } from "@/lib/agents/group-table";
 import { type Locale, pickLocalized } from "@/lib/i18n/dictionaries";
 import { aedToFils, formatAed } from "@/lib/money";
 
@@ -100,6 +101,9 @@ export function GroupTableClient({
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiPlan, setAiPlan] = useState<GroupTableAgentOutput | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiNotice, setAiNotice] = useState<string | null>(null);
 
   const loadSession = useCallback(async () => {
     const res = await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session${kQuery}`, {
@@ -208,11 +212,41 @@ export function GroupTableClient({
     router.push(`/orders/${data.order.id}`);
   }
 
+  async function handleSuggestGroupPlan() {
+    setAiLoading(true);
+    setAiNotice(null);
+    const res = await fetch(`/api/tables/${restaurantSlug}/${tableCode}/group-suggest${kQuery}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locale, k: tableToken ?? undefined }),
+    });
+    const data = (await res.json().catch(() => ({}))) as GroupTableAgentOutput & {
+      error?: string;
+      reason?: string;
+    };
+    setAiLoading(false);
+
+    if (!res.ok) {
+      if (res.status === 503 || data.reason === "AI_NOT_CONFIGURED") {
+        setAiNotice(
+          isAr
+            ? "الذكاء الاصطناعي غير مفعل حالياً — الأطباق المشتركة وتقسيم الفاتورة الحتمي يعملان أدناه بالكامل."
+            : "AI not configured — deterministic shared dishes and bill split below remain 100% active.",
+        );
+      } else {
+        setAiNotice(data.error || "Could not generate group suggestion");
+      }
+      return;
+    }
+
+    setAiPlan(data);
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link
-          href={`/r/${restaurantSlug}/t/${tableCode}`}
+          href={`/r/${restaurantSlug}/t/${tableCode}${kQuery}`}
           className="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-[var(--accent-primary)] hover:underline"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -294,6 +328,105 @@ export function GroupTableClient({
                 </div>
               ))}
             </div>
+          </section>
+
+          {/* AI Group Table Agent Curated Spread (Agent #5) */}
+          <section className="space-y-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-extrabold">
+                  <Sparkles className="h-5 w-5 text-[var(--accent-primary)]" />
+                  <span>
+                    {isAr
+                      ? "تشكيلة المشاركة الذكية وتقدير الفاتورة (AI)"
+                      : "AI Curated Sharing Set & Budget Plan"}
+                  </span>
+                </h2>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                  {isAr
+                    ? "يقترح أطباقاً مشتركة وفردية من الأطباق الموثقة الآمنة فقط مع إعادة حساب الأسعار على الخادم."
+                    : "Curates verified-safe shared dishes + personal picks within budgets, with server-recomputed AED splits."}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={aiLoading}
+                onClick={handleSuggestGroupPlan}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-4 py-2 text-xs font-bold text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>
+                  {aiLoading
+                    ? isAr
+                      ? "جاري التنسيق..."
+                      : "Curating..."
+                    : isAr
+                      ? "اقترح تشكيلة للطاولة"
+                      : "Suggest Group Sharing Set"}
+                </span>
+              </button>
+            </div>
+
+            {aiNotice && (
+              <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                {aiNotice}
+              </div>
+            )}
+
+            {aiPlan && (
+              <div className="space-y-4 border-t border-[var(--border-subtle)] pt-4">
+                <p className="text-sm font-medium text-[var(--text-primary)]">{aiPlan.summary}</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-2xl bg-[var(--bg-canvas)] p-4">
+                    <p className="text-xs font-bold uppercase text-[var(--accent-primary)]">
+                      {isAr ? "للمشاركة على الطاولة" : "Shared Centerpieces"}
+                    </p>
+                    <ul className="mt-2 space-y-2 text-xs">
+                      {aiPlan.sharedSet.map((s) => (
+                        <li key={s.dishId} className="flex justify-between gap-2">
+                          <span className="font-semibold">
+                            {pickLocalized(s.nameEn, s.nameAr, locale)}
+                            {s.requiredModifiersEn.length > 0
+                              ? ` (${(isAr ? s.requiredModifiersAr : s.requiredModifiersEn).join(", ")})`
+                              : ""}
+                          </span>
+                          <span className="font-mono font-bold">AED {s.effectivePriceAed}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="rounded-2xl bg-[var(--bg-canvas)] p-4">
+                    <p className="text-xs font-bold uppercase text-[var(--accent-primary)]">
+                      {isAr ? "اختيار فردي وتقدير الحصة" : "Personal Picks & Estimated Split"}
+                    </p>
+                    <ul className="mt-2 space-y-2 text-xs">
+                      {aiPlan.personalPicks.map((p) => (
+                        <li key={p.participantId} className="flex justify-between gap-2">
+                          <span>
+                            <strong>{p.participantName}:</strong>{" "}
+                            {pickLocalized(p.dish.nameEn, p.dish.nameAr, locale)}
+                          </span>
+                          <span className="font-mono font-bold">
+                            AED {p.dish.effectivePriceAed}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-3 border-t border-[var(--border-subtle)] pt-2 text-xs">
+                      {aiPlan.estimatedShares.map((sh) => (
+                        <div key={sh.participantId} className="flex justify-between py-0.5">
+                          <span className="text-[var(--text-secondary)]">
+                            {sh.displayName} {isAr ? "(الإجمالي المقدّر)" : "est. share"}
+                          </span>
+                          <span className="font-mono font-bold">AED {sh.totalAed}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Shared Dishes Everyone Can Eat */}

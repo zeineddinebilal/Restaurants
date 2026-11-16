@@ -1,6 +1,7 @@
 import type { SpiceLevel } from "@prisma/client";
 import { z } from "zod";
 import { type AgentCallResult, runStructuredAgent } from "@/lib/agents/gemini";
+import { wrapUntrustedText } from "@/lib/agents/guardrails";
 import { normalizeAiPriceToAed } from "@/lib/agents/menu-ingestion";
 import type { Locale } from "@/lib/i18n/dictionaries";
 import {
@@ -67,7 +68,7 @@ JSON schema:
   const rawResult = await runStructuredAgent({
     agentName: "tasteProfileAgent",
     systemInstruction,
-    contents: params.message.trim().slice(0, 1500),
+    contents: wrapUntrustedText(params.message.trim(), 1500),
     schema: rawTasteProfileSchema,
     userId: params.userId,
   });
