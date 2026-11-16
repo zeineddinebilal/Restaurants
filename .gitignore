@@ -1,6 +1,10 @@
 # Collaboration protocol state (never commit)
 .collab/
 
+# Never commit restaurant prospect CRM CSV files to public repo
+*prospects*.csv
+*research*.csv
+
 # Dependencies
 node_modules/
 .pnp

@@ -36,6 +36,7 @@ export interface EngineDishInput {
   descriptionAr?: string | null;
   priceAed: string;
   portionSize?: string | null;
+  caloriesKcal?: number | null;
   ingredientsEn: readonly string[];
   ingredientsAr: readonly string[];
   removableIngredients?: readonly string[];

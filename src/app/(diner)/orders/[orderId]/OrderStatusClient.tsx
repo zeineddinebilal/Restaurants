@@ -1,7 +1,16 @@
 "use client";
 
 import type { OrderStatus } from "@prisma/client";
-import { ArrowLeft, CheckCircle2, Clock, Star, Utensils, XCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Clock,
+  CreditCard,
+  ExternalLink,
+  Star,
+  Utensils,
+  XCircle,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { type Locale, pickLocalized } from "@/lib/i18n/dictionaries";
@@ -18,6 +27,8 @@ export interface SerializedOrderView {
     slug: string;
     nameEn: string;
     nameAr: string;
+    existingPaymentProvider?: string;
+    existingPaymentUrl?: string | null;
   };
   table: {
     tableCode: string;
@@ -50,6 +61,14 @@ export interface SerializedOrderView {
 }
 
 const STEPS: OrderStatus[] = ["SENT", "ACCEPTED", "PREPARING", "SERVED"];
+
+function getPaymentProviderLabel(provider: string | undefined, isAr: boolean): string | null {
+  if (!provider || provider === "NONE") return null;
+  if (provider === "QLUB") return "Qlub";
+  if (provider === "FOODICS_PAY") return "Foodics Pay";
+  if (provider === "FINEDINE") return "FineDine";
+  return isAr ? "رمز الدفع على الطاولة" : "your table QR";
+}
 
 export function OrderStatusClient({
   locale,
@@ -190,9 +209,49 @@ export function OrderStatusClient({
           </ol>
         )}
 
-        <p className="mt-5 rounded-2xl bg-[var(--bg-muted)] px-4 py-3 text-xs font-medium text-[var(--text-secondary)]">
-          {isAr ? order.settlement.instructionsAr : order.settlement.instructionsEn}
-        </p>
+        {(() => {
+          const providerLabel = getPaymentProviderLabel(
+            order.restaurant.existingPaymentProvider,
+            isAr,
+          );
+          const safePayUrl =
+            order.restaurant.existingPaymentUrl &&
+            /^https:\/\/\S+$/i.test(order.restaurant.existingPaymentUrl)
+              ? order.restaurant.existingPaymentUrl
+              : null;
+
+          if (!providerLabel) {
+            return (
+              <p className="mt-5 rounded-2xl bg-[var(--bg-muted)] px-4 py-3 text-xs font-medium text-[var(--text-secondary)]">
+                {isAr ? order.settlement.instructionsAr : order.settlement.instructionsEn}
+              </p>
+            );
+          }
+
+          return (
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--accent-primary)]/30 bg-[var(--accent-soft)] px-4 py-3.5">
+              <div className="flex items-center gap-2.5 text-sm font-bold text-[var(--text-primary)]">
+                <CreditCard className="h-4 w-4 shrink-0 text-[var(--accent-primary)]" />
+                <span>
+                  {isAr
+                    ? `ادفع عبر ${providerLabel} على طاولتك`
+                    : `Pay with ${providerLabel} at your table`}
+                </span>
+              </div>
+              {safePayUrl && (
+                <a
+                  href={safePayUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[var(--accent-hover)]"
+                >
+                  <span>{isAr ? `افتح ${providerLabel}` : `Open ${providerLabel}`}</span>
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
+              )}
+            </div>
+          );
+        })()}
       </section>
 
       {/* Ordered Items + Ratings */}

@@ -35,6 +35,15 @@ export function Navbar({
         </Link>
 
         <nav aria-label="Primary" className="flex flex-wrap items-center gap-2">
+          {!user && (
+            <Link
+              href="/for-restaurants"
+              className="inline-flex min-h-10 items-center rounded-full px-3.5 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-muted)]"
+            >
+              {locale === "ar" ? "للمطاعم" : "For Restaurants"}
+            </Link>
+          )}
+
           {user?.role === "DINER" && (
             <Link
               href="/home"

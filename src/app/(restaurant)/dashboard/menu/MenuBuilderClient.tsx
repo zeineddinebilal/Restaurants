@@ -44,6 +44,7 @@ export interface SerializedMenuItem {
   descriptionAr: string | null;
   priceAed: string;
   portionSize: string | null;
+  caloriesKcal: number | null;
   ingredientsEn: string[];
   ingredientsAr: string[];
   removableIngredients: string[];
@@ -143,6 +144,7 @@ export function MenuBuilderClient({
     descriptionAr: string;
     priceAed: string;
     portionSize: string;
+    caloriesKcalText: string;
     ingredientsEnText: string;
     ingredientsArText: string;
     removableIngredientsText: string;
@@ -398,6 +400,7 @@ export function MenuBuilderClient({
       descriptionAr: "",
       priceAed: "25.00",
       portionSize: "Regular",
+      caloriesKcalText: "",
       ingredientsEnText: "",
       ingredientsArText: "",
       removableIngredientsText: "",
@@ -426,6 +429,7 @@ export function MenuBuilderClient({
       descriptionAr: item.descriptionAr ?? "",
       priceAed: item.priceAed,
       portionSize: item.portionSize ?? "",
+      caloriesKcalText: item.caloriesKcal != null ? String(item.caloriesKcal) : "",
       ingredientsEnText: item.ingredientsEn.join(", "),
       ingredientsArText: item.ingredientsAr.join("، "),
       removableIngredientsText: item.removableIngredients.join(", "),
@@ -549,6 +553,12 @@ export function MenuBuilderClient({
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
 
+    const parsedKcal = editingItem.caloriesKcalText.trim()
+      ? Number.parseInt(editingItem.caloriesKcalText.trim(), 10)
+      : null;
+    const caloriesKcal =
+      parsedKcal !== null && Number.isFinite(parsedKcal) && parsedKcal >= 0 ? parsedKcal : null;
+
     const payload = {
       categoryId: editingItem.categoryId,
       nameEn: editingItem.nameEn,
@@ -557,6 +567,7 @@ export function MenuBuilderClient({
       descriptionAr: editingItem.descriptionAr || null,
       priceAed: editingItem.priceAed,
       portionSize: editingItem.portionSize || null,
+      caloriesKcal,
       ingredientsEn,
       ingredientsAr,
       removableIngredients,
@@ -1290,13 +1301,27 @@ export function MenuBuilderClient({
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-4">
                 <div className="space-y-1">
                   <label className="block text-xs font-semibold">Price (AED, 2 decimals)</label>
                   <input
                     required
                     value={editingItem.priceAed}
                     onChange={(e) => setEditingItem({ ...editingItem, priceAed: e.target.value })}
+                    className="w-full min-h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 font-mono text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold">Calories (kcal, optional)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10000}
+                    placeholder="e.g. 420"
+                    value={editingItem.caloriesKcalText}
+                    onChange={(e) =>
+                      setEditingItem({ ...editingItem, caloriesKcalText: e.target.value })
+                    }
                     className="w-full min-h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 font-mono text-sm"
                   />
                 </div>

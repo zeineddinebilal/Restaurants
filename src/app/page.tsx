@@ -53,7 +53,7 @@ export default async function LandingPage() {
                   {dict.landing.ctaSignIn}
                 </Link>
                 <Link
-                  href="/register?role=RESTAURANT_OWNER"
+                  href="/for-restaurants"
                   className="inline-flex min-h-12 items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-5 py-3 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-[var(--bg-muted)]"
                 >
                   <Store className="h-4 w-4 text-[var(--accent-primary)]" aria-hidden="true" />

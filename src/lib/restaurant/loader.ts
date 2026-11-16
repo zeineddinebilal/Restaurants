@@ -23,6 +23,7 @@ export async function loadManagedRestaurants(user: AuthenticatedUser, requestedI
             orderBy: { createdAt: "asc" },
             include: {
               modifiers: { orderBy: { createdAt: "asc" } },
+              verifiedBy: { select: { id: true, name: true, email: true } },
             },
           },
         },

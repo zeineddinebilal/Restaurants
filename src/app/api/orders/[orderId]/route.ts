@@ -14,7 +14,14 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ orderI
     where: { id: orderId },
     include: {
       restaurant: {
-        select: { id: true, slug: true, nameEn: true, nameAr: true },
+        select: {
+          id: true,
+          slug: true,
+          nameEn: true,
+          nameAr: true,
+          existingPaymentProvider: true,
+          existingPaymentUrl: true,
+        },
       },
       table: {
         select: { tableCode: true, displayName: true },

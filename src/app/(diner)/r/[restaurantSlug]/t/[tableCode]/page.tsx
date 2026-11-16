@@ -97,6 +97,7 @@ export default async function PersonalizedTableMenuPage({
       descriptionAr: item.descriptionAr,
       priceAed: item.priceAed.toFixed(2),
       portionSize: item.portionSize,
+      caloriesKcal: item.caloriesKcal,
       ingredientsEn: item.ingredientsEn,
       ingredientsAr: item.ingredientsAr,
       removableIngredients: item.removableIngredients,

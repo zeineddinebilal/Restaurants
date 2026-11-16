@@ -450,7 +450,12 @@ export function PersonalizedMenuClient({
               </h3>
             </Link>
             <div className="text-end font-mono text-sm font-extrabold text-[var(--text-primary)]">
-              {formatAed(item.effectivePriceFils, locale)}
+              <div>{formatAed(item.effectivePriceFils, locale)}</div>
+              {item.dish.caloriesKcal != null && (
+                <div className="text-[11px] font-medium text-[var(--text-secondary)]">
+                  {isAr ? `${item.dish.caloriesKcal} سعرة` : `${item.dish.caloriesKcal} kcal`}
+                </div>
+              )}
             </div>
           </div>
 

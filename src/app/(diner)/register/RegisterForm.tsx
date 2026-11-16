@@ -11,13 +11,20 @@ export function RegisterForm({
   signInLabel,
   locale,
   initialRole,
+  prospectInvite,
+  invitedRestaurantName,
+  returnTo,
 }: {
   copy: Dictionary["auth"];
   signInLabel: string;
   locale: Locale;
   initialRole: "DINER" | "RESTAURANT_OWNER";
+  prospectInvite?: string;
+  invitedRestaurantName?: string | null;
+  returnTo?: string;
 }) {
   const router = useRouter();
+  const isAr = locale === "ar";
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -33,7 +40,14 @@ export function RegisterForm({
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password, role, locale }),
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+        role: prospectInvite ? "RESTAURANT_OWNER" : role,
+        locale,
+        ...(prospectInvite ? { prospectInvite } : {}),
+      }),
     });
 
     if (!res.ok) {
@@ -55,7 +69,8 @@ export function RegisterForm({
       return;
     }
 
-    router.push(role === "RESTAURANT_OWNER" ? "/dashboard" : "/home");
+    const effectiveRole = prospectInvite ? "RESTAURANT_OWNER" : role;
+    router.push(returnTo || (effectiveRole === "RESTAURANT_OWNER" ? "/dashboard" : "/home"));
     router.refresh();
   }
 
@@ -64,6 +79,14 @@ export function RegisterForm({
       <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-sm sm:p-8">
         <h1 className="text-2xl font-bold text-[var(--text-primary)]">{copy.registerTitle}</h1>
         <p className="mt-1.5 text-sm text-[var(--text-secondary)]">{copy.registerSubtitle}</p>
+
+        {invitedRestaurantName && (
+          <div className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs font-medium text-emerald-800 dark:text-emerald-200">
+            {isAr
+              ? `دعوة تسجيل شريك نشطة لمطعم "${invitedRestaurantName}" — سيتم إعداد حساب المطعم تلقائياً عند التسجيل.`
+              : `Partner onboarding invite active for "${invitedRestaurantName}" — your restaurant workspace will be pre-configured automatically.`}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           {error && (
@@ -128,9 +151,10 @@ export function RegisterForm({
             </label>
             <select
               id="register-role"
-              value={role}
+              value={prospectInvite ? "RESTAURANT_OWNER" : role}
+              disabled={Boolean(prospectInvite)}
               onChange={(e) => setRole(e.target.value as "DINER" | "RESTAURANT_OWNER")}
-              className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-4 py-2.5 text-sm text-[var(--text-primary)]"
+              className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-4 py-2.5 text-sm text-[var(--text-primary)] disabled:opacity-70"
             >
               <option value="DINER">{copy.roleDiner}</option>
               <option value="RESTAURANT_OWNER">{copy.roleOwner}</option>

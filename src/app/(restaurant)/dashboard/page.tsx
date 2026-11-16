@@ -30,6 +30,9 @@ export default async function RestaurantDashboardPage({
       cuisine: activeRestaurant.cuisine,
       descriptionEn: activeRestaurant.descriptionEn,
       descriptionAr: activeRestaurant.descriptionAr,
+      allergenPersonInCharge: activeRestaurant.allergenPersonInCharge,
+      existingPaymentProvider: activeRestaurant.existingPaymentProvider,
+      existingPaymentUrl: activeRestaurant.existingPaymentUrl,
       status: activeRestaurant.status,
       branches: activeRestaurant.branches.map((b) => ({
         id: b.id,

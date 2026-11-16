@@ -3,6 +3,7 @@ import {
   BookOpenCheck,
   ClipboardList,
   CreditCard,
+  FileCheck2,
   QrCode,
   Settings2,
 } from "lucide-react";
@@ -26,6 +27,7 @@ export default async function RestaurantDashboardLayout({
       ? {
           setup: "بيانات المطعم والفروع",
           menu: "منشئ القائمة والتوثيق",
+          allergenMatrix: "جدول مسببات الحساسية",
           tables: "الطاولات ورموز QR",
           analytics: "التحليلات والرؤى",
           billing: "الفوترة والرسوم",
@@ -34,6 +36,7 @@ export default async function RestaurantDashboardLayout({
       : {
           setup: "Setup & Branches",
           menu: "Menu Builder & Verify",
+          allergenMatrix: "Allergen Matrix",
           tables: "Tables & QR Codes",
           analytics: "Analytics & Insights",
           billing: "Billing",
@@ -62,6 +65,13 @@ export default async function RestaurantDashboardLayout({
                   aria-hidden="true"
                 />
                 <span>{labels.menu}</span>
+              </Link>
+              <Link
+                href="/dashboard/allergen-matrix"
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-muted)]"
+              >
+                <FileCheck2 className="h-4 w-4 text-[var(--accent-primary)]" aria-hidden="true" />
+                <span>{labels.allergenMatrix}</span>
               </Link>
               <Link
                 href="/dashboard/tables"

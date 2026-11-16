@@ -199,6 +199,8 @@ async function main() {
       descriptionAr:
         "مطعم لبناني تجريبي يعرض القوائم المخصصة الآمنة من مسببات الحساسية والمناسبة للميزانية.",
       cuisine: "Lebanese",
+      allergenPersonInCharge: "Chef Karim Mansour",
+      existingPaymentProvider: "QLUB",
       status: "APPROVED",
       isDemo: true,
       ownerId: owner.id,
@@ -212,6 +214,8 @@ async function main() {
       descriptionAr:
         "مطعم لبناني تجريبي يعرض القوائم المخصصة الآمنة من مسببات الحساسية والمناسبة للميزانية.",
       cuisine: "Lebanese",
+      allergenPersonInCharge: "Chef Karim Mansour",
+      existingPaymentProvider: "QLUB",
       status: "APPROVED",
       isDemo: true,
       ownerId: owner.id,

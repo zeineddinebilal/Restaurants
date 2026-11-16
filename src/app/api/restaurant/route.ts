@@ -23,6 +23,8 @@ const createRestaurantSchema = z.object({
   initialBranchAddressAr: z.string().trim().max(240).optional(),
 });
 
+const EXISTING_PAYMENT_PROVIDERS = ["NONE", "QLUB", "FOODICS_PAY", "FINEDINE", "OTHER"] as const;
+
 const updateRestaurantSchema = z.object({
   restaurantId: z.string().min(1),
   nameEn: z.string().trim().min(2).max(120),
@@ -36,6 +38,15 @@ const updateRestaurantSchema = z.object({
   cuisine: z.string().trim().min(2).max(80),
   descriptionEn: z.string().trim().max(600).optional().nullable(),
   descriptionAr: z.string().trim().max(600).optional().nullable(),
+  allergenPersonInCharge: z.string().trim().max(120).optional().nullable(),
+  existingPaymentProvider: z.enum(EXISTING_PAYMENT_PROVIDERS).optional(),
+  existingPaymentUrl: z
+    .string()
+    .trim()
+    .max(300)
+    .refine((v) => v === "" || /^https:\/\/\S+$/i.test(v), "Payment link must start with https://")
+    .optional()
+    .nullable(),
 });
 
 export async function GET() {
@@ -181,6 +192,15 @@ export async function PATCH(req: NextRequest) {
       cuisine: parsed.data.cuisine,
       descriptionEn: parsed.data.descriptionEn ?? null,
       descriptionAr: parsed.data.descriptionAr ?? null,
+      ...(parsed.data.allergenPersonInCharge !== undefined
+        ? { allergenPersonInCharge: parsed.data.allergenPersonInCharge || null }
+        : {}),
+      ...(parsed.data.existingPaymentProvider !== undefined
+        ? { existingPaymentProvider: parsed.data.existingPaymentProvider }
+        : {}),
+      ...(parsed.data.existingPaymentUrl !== undefined
+        ? { existingPaymentUrl: parsed.data.existingPaymentUrl || null }
+        : {}),
     },
   });
 

@@ -36,6 +36,9 @@ export interface SerializedRestaurantSummary {
   cuisine: string;
   descriptionEn: string | null;
   descriptionAr: string | null;
+  allergenPersonInCharge: string | null;
+  existingPaymentProvider: string;
+  existingPaymentUrl: string | null;
   status: "PENDING" | "APPROVED" | "SUSPENDED";
   branches: BranchItem[];
   members: StaffMemberItem[];
@@ -65,6 +68,13 @@ export function RestaurantSetupClient({
   const [cuisine, setCuisine] = useState(active?.cuisine ?? "Lebanese");
   const [descriptionEn, setDescriptionEn] = useState(active?.descriptionEn ?? "");
   const [descriptionAr, setDescriptionAr] = useState(active?.descriptionAr ?? "");
+  const [allergenPersonInCharge, setAllergenPersonInCharge] = useState(
+    active?.allergenPersonInCharge ?? "",
+  );
+  const [existingPaymentProvider, setExistingPaymentProvider] = useState(
+    active?.existingPaymentProvider ?? "NONE",
+  );
+  const [existingPaymentUrl, setExistingPaymentUrl] = useState(active?.existingPaymentUrl ?? "");
   const [initialCity, setInitialCity] = useState("Dubai");
 
   const [branchNameEn, setBranchNameEn] = useState("");
@@ -129,6 +139,9 @@ export function RestaurantSetupClient({
         cuisine,
         descriptionEn,
         descriptionAr,
+        allergenPersonInCharge: allergenPersonInCharge.trim() || null,
+        existingPaymentProvider,
+        existingPaymentUrl: existingPaymentUrl.trim() || null,
       }),
     });
     setSaving(false);
@@ -453,6 +466,65 @@ export function RestaurantSetupClient({
                 value={descriptionAr}
                 onChange={(e) => setDescriptionAr(e.target.value)}
                 className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3.5 py-2 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Allergen Documentation & Payment QR Coexistence */}
+          <div className="grid gap-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-4 sm:grid-cols-3">
+            <div className="space-y-1">
+              <label className="block text-sm font-medium">
+                {isAr
+                  ? "المسؤول عن معلومات مسببات الحساسية"
+                  : "Person in charge of allergen information"}
+              </label>
+              <input
+                type="text"
+                maxLength={120}
+                value={allergenPersonInCharge}
+                onChange={(e) => setAllergenPersonInCharge(e.target.value)}
+                placeholder={isAr ? "مثال: الشيف التنفيذي كريم" : "e.g. Chef Karim Mansour"}
+                className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3.5 py-2 text-sm"
+              />
+              <p className="text-[11px] text-[var(--text-secondary)]">
+                {isAr
+                  ? "يساعدك على إبقاء معلومات مسببات الحساسية موثقة ومتسقة ويظهر على جدول مسببات الحساسية المطبوع."
+                  : "Helps you keep allergen information documented and consistent; displayed on your printable Allergen Matrix."}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-sm font-medium">
+                {isAr ? "مزود دفع QR الحالي على الطاولة" : "Existing payment provider"}
+              </label>
+              <select
+                value={existingPaymentProvider}
+                onChange={(e) => setExistingPaymentProvider(e.target.value)}
+                className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3.5 py-2 text-sm"
+              >
+                <option value="NONE">{isAr ? "لا يوجد (الدفع عبر الكاشير)" : "None"}</option>
+                <option value="QLUB">Qlub</option>
+                <option value="FOODICS_PAY">Foodics Pay</option>
+                <option value="FINEDINE">FineDine</option>
+                <option value="OTHER">{isAr ? "مزود آخر" : "Other"}</option>
+              </select>
+              <p className="text-[11px] text-[var(--text-secondary)]">
+                {isAr
+                  ? "يعمل PlateFit جنباً إلى جنب مع رمز الدفع الحالي لديك."
+                  : "PlateFit sits alongside your table payment QR and directs diners to pay there."}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-sm font-medium">
+                {isAr ? "رابط الدفع (اختياري)" : "Optional payment link (https://)"}
+              </label>
+              <input
+                type="url"
+                value={existingPaymentUrl}
+                onChange={(e) => setExistingPaymentUrl(e.target.value)}
+                placeholder="https://pay.qlub.io/..."
+                className="w-full min-h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3.5 py-2 text-sm font-mono"
               />
             </div>
           </div>

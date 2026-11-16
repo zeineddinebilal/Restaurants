@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Receipt,
   Sliders,
+  Target,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -17,6 +18,11 @@ export default async function AdminPortalLayout({ children }: { children: React.
 
   const links = [
     { href: "/admin", label: isAr ? "نظرة عامة" : "Overview", icon: LayoutDashboard },
+    {
+      href: "/admin/pipeline",
+      label: isAr ? "خط المبيعات (CRM)" : "Sales Pipeline",
+      icon: Target,
+    },
     { href: "/admin/restaurants", label: isAr ? "المطاعم" : "Restaurants", icon: Building2 },
     { href: "/admin/users", label: isAr ? "المستخدمون" : "Users", icon: Users },
     { href: "/admin/orders", label: isAr ? "الطلبات والسجل" : "Orders & Ledger", icon: Receipt },

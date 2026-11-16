@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { convertProspectOnOwnerSignupTx } from "@/lib/admin/prospects";
 import { prisma } from "@/lib/db";
 import { isLocale } from "@/lib/i18n/dictionaries";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
@@ -11,6 +12,7 @@ const registerSchema = z.object({
   password: z.string().min(8).max(128),
   role: z.enum(["DINER", "RESTAURANT_OWNER"]).default("DINER"),
   locale: z.enum(["en", "ar"]).optional(),
+  prospectInvite: z.string().trim().min(8).max(80).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -56,12 +58,14 @@ export async function POST(req: NextRequest) {
   const locale = isLocale(parsed.data.locale) ? parsed.data.locale : "en";
 
   const user = await prisma.$transaction(async (tx) => {
+    const effectiveRole = parsed.data.prospectInvite ? "RESTAURANT_OWNER" : parsed.data.role;
+
     const created = await tx.user.create({
       data: {
         name: parsed.data.name,
         email,
         passwordHash,
-        role: parsed.data.role,
+        role: effectiveRole,
         locale,
       },
       select: {
@@ -79,6 +83,13 @@ export async function POST(req: NextRequest) {
           userId: created.id,
           displayName: created.name,
         },
+      });
+    } else if (parsed.data.prospectInvite) {
+      await convertProspectOnOwnerSignupTx({
+        tx,
+        inviteToken: parsed.data.prospectInvite,
+        ownerUserId: created.id,
+        ownerEmail: email,
       });
     }
 

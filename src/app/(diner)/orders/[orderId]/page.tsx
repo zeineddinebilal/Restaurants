@@ -22,7 +22,16 @@ export default async function OrderStatusPage({
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: {
-      restaurant: { select: { id: true, slug: true, nameEn: true, nameAr: true } },
+      restaurant: {
+        select: {
+          id: true,
+          slug: true,
+          nameEn: true,
+          nameAr: true,
+          existingPaymentProvider: true,
+          existingPaymentUrl: true,
+        },
+      },
       table: { select: { tableCode: true, displayName: true } },
       tableSession: {
         include: {

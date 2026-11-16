@@ -46,6 +46,7 @@ const updateItemSchema = z.object({
   descriptionAr: z.string().trim().max(600).nullable().optional(),
   priceAed: exactAedField(false).optional(),
   portionSize: z.string().trim().max(80).nullable().optional(),
+  caloriesKcal: z.number().int().min(0).max(10000).nullable().optional(),
   ingredientsEn: z.array(z.string().trim().min(1)).optional(),
   ingredientsAr: z.array(z.string().trim().min(1)).optional(),
   removableIngredients: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
@@ -210,6 +211,8 @@ export async function PATCH(
         priceAed: parsed.data.priceAed ?? existing.priceAed,
         portionSize:
           parsed.data.portionSize !== undefined ? parsed.data.portionSize : existing.portionSize,
+        caloriesKcal:
+          parsed.data.caloriesKcal !== undefined ? parsed.data.caloriesKcal : existing.caloriesKcal,
         ingredientsEn: nextIngredientsEn,
         ingredientsAr: nextIngredientsAr,
         removableIngredients:

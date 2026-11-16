@@ -144,8 +144,19 @@ export default async function DishDetailPage({
               <h1 className="mt-1 text-2xl font-extrabold sm:text-3xl">
                 {pickLocalized(dish.nameEn, dish.nameAr, locale)}
               </h1>
-              {dish.portionSize && (
-                <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{dish.portionSize}</p>
+              {(dish.portionSize || dish.caloriesKcal != null) && (
+                <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+                  {[
+                    dish.portionSize,
+                    dish.caloriesKcal != null
+                      ? isAr
+                        ? `${dish.caloriesKcal} سعرة حرارية`
+                        : `${dish.caloriesKcal} kcal`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" • ")}
+                </p>
               )}
             </div>
 
