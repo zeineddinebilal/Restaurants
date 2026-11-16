@@ -1,15 +1,20 @@
 import { Camera, MapPin, QrCode, SlidersHorizontal, Utensils } from "lucide-react";
+import { headers } from "next/headers";
 import Link from "next/link";
+import { DineWithCompanionsCard } from "@/components/diner/DineWithCompanionsCard";
 import { prisma } from "@/lib/db";
+import { createOrGetCompanionInvite, listConnectedCompanions } from "@/lib/diner/companions";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
 import { pickLocalized } from "@/lib/i18n/dictionaries";
 import { getI18nContext } from "@/lib/i18n/server";
+import { generateQrCodeSvg } from "@/lib/qr";
 
 export const dynamic = "force-dynamic";
 
 export default async function DinerHomePage() {
-  const [{ locale }, { profile }, approvedRestaurants] = await Promise.all([
+  const [{ locale }, hdrs, activeDiner, approvedRestaurants] = await Promise.all([
     getI18nContext(),
+    headers(),
     getActiveDinerProfile(),
     prisma.restaurant.findMany({
       where: { status: "APPROVED" },
@@ -26,7 +31,25 @@ export default async function DinerHomePage() {
     }),
   ]);
 
+  const { profile, isAuthenticated } = activeDiner;
   const isAr = locale === "ar";
+
+  let companions = [] as Awaited<ReturnType<typeof listConnectedCompanions>>;
+  let inviteData: { code: string; shareUrl: string; qrSvg: string } | null = null;
+
+  if (isAuthenticated && profile?.id) {
+    const [loadedCompanions, invite] = await Promise.all([
+      listConnectedCompanions(profile.id),
+      createOrGetCompanionInvite(profile.id),
+    ]);
+    companions = loadedCompanions;
+    const host = hdrs.get("x-forwarded-host") || hdrs.get("host") || "localhost:3000";
+    const proto = hdrs.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
+    const origin = process.env.NEXT_PUBLIC_APP_URL?.trim() || `${proto}://${host}`;
+    const shareUrl = `${origin.replace(/\/+$/, "")}/companions/join?code=${encodeURIComponent(invite.code)}`;
+    const qrSvg = await generateQrCodeSvg(shareUrl);
+    inviteData = { code: invite.code, shareUrl, qrSvg };
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:px-6">
@@ -137,6 +160,19 @@ export default async function DinerHomePage() {
           </div>
         </div>
       </section>
+
+      {/* Dining Companions ("Dine with…") & Pre-Table Meal Planner */}
+      <DineWithCompanionsCard
+        locale={locale}
+        isAuthenticated={isAuthenticated}
+        initialCompanions={companions}
+        invite={inviteData}
+        approvedRestaurants={approvedRestaurants.map((r) => ({
+          id: r.id,
+          nameEn: r.nameEn,
+          nameAr: r.nameAr,
+        }))}
+      />
 
       {/* Participating UAE Restaurants */}
       <section className="space-y-4">

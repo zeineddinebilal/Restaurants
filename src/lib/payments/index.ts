@@ -7,6 +7,7 @@
  */
 
 export type PaymentMethodMode = "PAY_AT_RESTAURANT" | "ONLINE_CARD";
+export type TableSettlementMode = "SPLIT_BY_PERSON" | "ONE_PERSON_PAYS_ALL";
 
 export interface PaymentIntentResult {
   mode: PaymentMethodMode;

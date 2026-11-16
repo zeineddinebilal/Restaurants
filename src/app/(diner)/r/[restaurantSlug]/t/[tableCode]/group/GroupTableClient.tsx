@@ -44,6 +44,9 @@ interface SharedDishSuggestion {
   };
   effectivePriceFils: number;
   requiredModifiers: Array<{ id: string; nameEn: string; nameAr: string }>;
+  autoOrderNotesEn?: string[];
+  dislikeNoticesEn?: string[];
+  dislikeNoticesAr?: string[];
 }
 
 interface TableSessionResponse {
@@ -58,6 +61,8 @@ interface TableSessionResponse {
   participants: TableParticipantView[];
   pricedLines: PricedLineView[];
   billSplit: {
+    paymentMode?: "SPLIT_BY_PERSON" | "ONE_PERSON_PAYS_ALL";
+    payerParticipantId?: string | null;
     sharedPoolFils: number;
     totalFils: number;
     totalAed: string;
@@ -159,8 +164,31 @@ export function GroupTableClient({
             modifierIds: shared.requiredModifiers.map((m) => m.id),
             quantity: 1,
             forSharedTable: true,
+            specialInstructions:
+              shared.autoOrderNotesEn && shared.autoOrderNotesEn.length > 0
+                ? shared.autoOrderNotesEn.join(", ")
+                : undefined,
           },
         ],
+      }),
+    });
+    await loadSession();
+    setBusy(false);
+  }
+
+  async function handleSetPaymentMode(
+    paymentMode: "SPLIT_BY_PERSON" | "ONE_PERSON_PAYS_ALL",
+    payerParticipantId?: string | null,
+  ) {
+    setBusy(true);
+    await fetch(`/api/tables/${restaurantSlug}/${tableCode}/session${kQuery}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "set_payment_mode",
+        k: tableToken ?? undefined,
+        paymentMode,
+        payerParticipantId: payerParticipantId ?? sessionData?.selfParticipantId ?? null,
       }),
     });
     await loadSession();
@@ -459,6 +487,16 @@ export function GroupTableClient({
                           .join(", ")}
                       </p>
                     )}
+                    {((isAr ? shared.dislikeNoticesAr : shared.dislikeNoticesEn) ?? []).map(
+                      (note, idx) => (
+                        <p
+                          key={idx}
+                          className="mt-1.5 rounded-lg bg-amber-500/12 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:text-amber-300"
+                        >
+                          {note}
+                        </p>
+                      ),
+                    )}
                     <p className="mt-1.5 text-xs text-[var(--text-secondary)]">
                       {pickLocalized(shared.dish.descriptionEn, shared.dish.descriptionAr, locale)}
                     </p>
@@ -557,13 +595,80 @@ export function GroupTableClient({
               </button>
             </div>
 
-            {/* Bill Split Estimate */}
+            {/* Bill Split Estimate & Paying Together Mode */}
             <div className="space-y-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-sm">
-              <div className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-[var(--accent-primary)]" />
-                <h2 className="text-lg font-extrabold">
-                  {isAr ? "تقدير تقسيم الفاتورة" : "Bill Split Estimate"}
-                </h2>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Receipt className="h-5 w-5 text-[var(--accent-primary)]" />
+                  <h2 className="text-lg font-extrabold">
+                    {isAr ? "طريقة الدفع وتقسيم الفاتورة" : "Paying Together & Bill Split"}
+                  </h2>
+                </div>
+              </div>
+
+              {/* Split by person vs One person pays for all */}
+              <div className="space-y-2 rounded-2xl bg-[var(--bg-canvas)] p-3 text-xs">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleSetPaymentMode("SPLIT_BY_PERSON")}
+                    className={`min-h-9 flex-1 rounded-xl px-3 py-1.5 font-bold transition ${
+                      (sessionData.billSplit.paymentMode ?? "SPLIT_BY_PERSON") === "SPLIT_BY_PERSON"
+                        ? "bg-[var(--accent-primary)] text-white"
+                        : "border border-[var(--border-subtle)] bg-[var(--bg-surface)]"
+                    }`}
+                  >
+                    {isAr ? "تقسيم حسب كل شخص" : "Split by person"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void handleSetPaymentMode(
+                        "ONE_PERSON_PAYS_ALL",
+                        sessionData.billSplit.payerParticipantId ?? sessionData.selfParticipantId,
+                      )
+                    }
+                    className={`min-h-9 flex-1 rounded-xl px-3 py-1.5 font-bold transition ${
+                      sessionData.billSplit.paymentMode === "ONE_PERSON_PAYS_ALL"
+                        ? "bg-[var(--accent-primary)] text-white"
+                        : "border border-[var(--border-subtle)] bg-[var(--bg-surface)]"
+                    }`}
+                  >
+                    {isAr ? "شخص واحد يدفع للجميع" : "One person pays for all"}
+                  </button>
+                </div>
+
+                {sessionData.billSplit.paymentMode === "ONE_PERSON_PAYS_ALL" && (
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <span className="font-semibold text-[var(--text-secondary)]">
+                      {isAr ? "الدافع عن الطاولة:" : "Host paying:"}
+                    </span>
+                    <select
+                      value={
+                        sessionData.billSplit.payerParticipantId ?? sessionData.selfParticipantId
+                      }
+                      onChange={(e) =>
+                        void handleSetPaymentMode("ONE_PERSON_PAYS_ALL", e.target.value)
+                      }
+                      aria-label="Select payer"
+                      className="min-h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1 font-semibold"
+                    >
+                      {sessionData.participants.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-[var(--text-secondary)]">
+                  {isAr
+                    ? "يتم سداد الفاتورة مباشرة لدى المطعم كالمعتاد."
+                    : "Payment is settled directly with the restaurant at your table."}
+                </p>
               </div>
 
               <ul className="divide-y divide-[var(--border-subtle)]">

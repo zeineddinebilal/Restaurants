@@ -2,6 +2,10 @@ import type { SpiceLevel } from "@prisma/client";
 import { getVerifiedGuestToken } from "@/lib/auth/guest";
 import { getLiveAuthenticatedUser } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
+import {
+  type CustomAvoidIngredient,
+  parseCustomAvoidIngredientsJson,
+} from "@/lib/menu/ingredient-synonyms";
 
 export interface SerializedDinerProfile {
   id?: string;
@@ -9,6 +13,7 @@ export interface SerializedDinerProfile {
   displayName: string;
   dietaryRestrictions: string[];
   allergens: string[];
+  customAvoidIngredients: CustomAvoidIngredient[];
   likedIngredients: string[];
   dislikedIngredients: string[];
   favoriteCuisines: string[];
@@ -16,6 +21,7 @@ export interface SerializedDinerProfile {
   maxBudgetAed: string | null;
   preferHighProtein: boolean;
   preferKeto: boolean;
+  shareFullProfileWithCompanions: boolean;
   pastRatingsByDishId: Record<string, number>;
 }
 
@@ -64,6 +70,7 @@ export async function getActiveDinerProfile(): Promise<{
         displayName: dbProfile.displayName,
         dietaryRestrictions: dbProfile.dietaryRestrictions,
         allergens: dbProfile.allergens,
+        customAvoidIngredients: parseCustomAvoidIngredientsJson(dbProfile.customAvoidIngredients),
         likedIngredients: dbProfile.likedIngredients,
         dislikedIngredients: dbProfile.dislikedIngredients,
         favoriteCuisines: dbProfile.favoriteCuisines,
@@ -71,6 +78,7 @@ export async function getActiveDinerProfile(): Promise<{
         maxBudgetAed: dbProfile.maxBudgetAed ? dbProfile.maxBudgetAed.toFixed(2) : null,
         preferHighProtein: dbProfile.preferHighProtein,
         preferKeto: dbProfile.preferKeto,
+        shareFullProfileWithCompanions: dbProfile.shareFullProfileWithCompanions,
         pastRatingsByDishId,
       },
     };
@@ -111,6 +119,7 @@ export async function getActiveDinerProfile(): Promise<{
       displayName: guestProfile.displayName,
       dietaryRestrictions: guestProfile.dietaryRestrictions,
       allergens: guestProfile.allergens,
+      customAvoidIngredients: parseCustomAvoidIngredientsJson(guestProfile.customAvoidIngredients),
       likedIngredients: guestProfile.likedIngredients,
       dislikedIngredients: guestProfile.dislikedIngredients,
       favoriteCuisines: guestProfile.favoriteCuisines,
@@ -118,6 +127,7 @@ export async function getActiveDinerProfile(): Promise<{
       maxBudgetAed: guestProfile.maxBudgetAed ? guestProfile.maxBudgetAed.toFixed(2) : null,
       preferHighProtein: guestProfile.preferHighProtein,
       preferKeto: guestProfile.preferKeto,
+      shareFullProfileWithCompanions: guestProfile.shareFullProfileWithCompanions,
       pastRatingsByDishId,
     },
   };

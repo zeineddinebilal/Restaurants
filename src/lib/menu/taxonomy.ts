@@ -41,6 +41,7 @@ export const ALLERGEN_LABELS: Record<CanonicalAllergen, { en: string; ar: string
   sulphites: { en: "Sulphites", ar: "كبريتيت" },
 };
 
+// Dish-level diet tags stored on MenuItem
 export const CANONICAL_DIET_TAGS = [
   "vegetarian",
   "vegan",
@@ -48,6 +49,7 @@ export const CANONICAL_DIET_TAGS = [
   "halal",
   "keto",
   "high_protein",
+  "low_sugar",
 ] as const;
 
 export type CanonicalDietTag = (typeof CANONICAL_DIET_TAGS)[number];
@@ -57,8 +59,43 @@ export const DIET_TAG_LABELS: Record<CanonicalDietTag, { en: string; ar: string 
   vegan: { en: "Vegan", ar: "نباتي صرف (فيغن)" },
   pescatarian: { en: "Pescatarian", ar: "نباتي يتناول السمك" },
   halal: { en: "Halal", ar: "حلال" },
-  keto: { en: "Keto", ar: "كيتو" },
+  keto: { en: "Keto / Low-Carb", ar: "كيتو / قليل الكربوهيدرات" },
   high_protein: { en: "High Protein", ar: "عالي البروتين" },
+  low_sugar: { en: "Diabetic-Friendly / Low-Sugar", ar: "مناسب للسكري / قليل السكر" },
+};
+
+// Diner-level hard & lifestyle diet options (superset of dish tags, including meat exclusions)
+export const HARD_DINER_DIETS = [
+  "vegetarian",
+  "vegan",
+  "pescatarian",
+  "halal",
+  "no_pork",
+  "no_beef",
+  "no_red_meat",
+  "gluten_free_lifestyle",
+] as const;
+
+export type HardDinerDiet = (typeof HARD_DINER_DIETS)[number];
+
+export const SOFT_LIFESTYLE_DIETS = ["keto", "high_protein", "low_sugar"] as const;
+export type SoftLifestyleDiet = (typeof SOFT_LIFESTYLE_DIETS)[number];
+
+export const ALL_DINER_DIETS = [...HARD_DINER_DIETS, ...SOFT_LIFESTYLE_DIETS] as const;
+export type DinerDietOption = (typeof ALL_DINER_DIETS)[number];
+
+export const DINER_DIET_LABELS: Record<DinerDietOption, { en: string; ar: string }> = {
+  vegetarian: { en: "Vegetarian", ar: "نباتي" },
+  vegan: { en: "Vegan", ar: "نباتي صرف (فيغن)" },
+  pescatarian: { en: "Pescatarian", ar: "نباتي يتناول السمك" },
+  halal: { en: "Halal", ar: "حلال" },
+  no_pork: { en: "No Pork", ar: "بدون لحم خنزير" },
+  no_beef: { en: "No Beef", ar: "بدون لحم بقري" },
+  no_red_meat: { en: "No Red Meat", ar: "بدون لحوم حمراء" },
+  gluten_free_lifestyle: { en: "Gluten-Free Lifestyle", ar: "نظام خالٍ من الغلوتين" },
+  keto: { en: "Keto / Low-Carb", ar: "كيتو / قليل الكربوهيدرات" },
+  high_protein: { en: "High Protein", ar: "عالي البروتين" },
+  low_sugar: { en: "Diabetic-Friendly / Low-Sugar", ar: "مناسب للسكري / قليل السكر" },
 };
 
 export const SPICE_LEVELS = ["NONE", "MILD", "MEDIUM", "HOT"] as const;
@@ -87,6 +124,17 @@ const ALLERGEN_ALIASES: Record<string, CanonicalAllergen> = {
   prawns: "crustaceans",
   soya: "soy",
   sulfites: "sulphites",
+};
+
+const DINER_DIET_ALIASES: Record<string, DinerDietOption> = {
+  pork_free: "no_pork",
+  without_pork: "no_pork",
+  beef_free: "no_beef",
+  red_meat_free: "no_red_meat",
+  gluten_free: "gluten_free_lifestyle",
+  low_carb: "keto",
+  diabetic: "low_sugar",
+  diabetic_friendly: "low_sugar",
 };
 
 export function normalizeAllergenList(raw: readonly string[]): CanonicalAllergen[] {
@@ -119,6 +167,25 @@ export function normalizeDietTagList(raw: readonly string[]): CanonicalDietTag[]
       .replace(/[\s-]+/g, "_");
     if (allowed.has(cleaned)) {
       result.add(cleaned as CanonicalDietTag);
+    }
+  }
+
+  return Array.from(result);
+}
+
+export function normalizeDinerDietRestrictions(raw: readonly string[]): DinerDietOption[] {
+  const allowed = new Set<string>(ALL_DINER_DIETS);
+  const result = new Set<DinerDietOption>();
+
+  for (const entry of raw) {
+    const cleaned = entry
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
+    if (allowed.has(cleaned)) {
+      result.add(cleaned as DinerDietOption);
+    } else if (DINER_DIET_ALIASES[cleaned]) {
+      result.add(DINER_DIET_ALIASES[cleaned]!);
     }
   }
 

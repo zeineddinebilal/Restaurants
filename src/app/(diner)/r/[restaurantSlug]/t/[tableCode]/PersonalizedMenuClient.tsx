@@ -44,6 +44,7 @@ interface DraftCartEntry {
   modifierIds: string[];
   modifierNamesEn: string[];
   modifierNamesAr: string[];
+  specialInstructions: string | null;
   personaOwner: PersonaKey;
   participantName: string;
   quantity: number;
@@ -254,6 +255,7 @@ export function PersonalizedMenuClient({
       displayName: initialProfile?.displayName ?? (isAr ? "ضيف" : "Guest"),
       dietaryRestrictions: guestDiets,
       allergens: guestAllergens,
+      customAvoidIngredients: initialProfile?.customAvoidIngredients ?? [],
       likedIngredients: initialProfile?.likedIngredients ?? [],
       dislikedIngredients: initialProfile?.dislikedIngredients ?? [],
       spiceTolerance: initialProfile?.spiceTolerance ?? "MEDIUM",
@@ -311,6 +313,7 @@ export function PersonalizedMenuClient({
     modifierIds: string[];
     modifierNamesEn: string[];
     modifierNamesAr: string[];
+    specialInstructions?: string | null;
     ownerPersona: PersonaKey;
   }) {
     const participantName =
@@ -324,7 +327,8 @@ export function PersonalizedMenuClient({
               ? "Shared Table"
               : initialProfile?.displayName || "Guest Diner";
 
-    const key = `${params.ownerPersona}:${params.dishId}:${params.modifierIds.join(",")}`;
+    const noteStr = params.specialInstructions?.trim() || null;
+    const key = `${params.ownerPersona}:${params.dishId}:${params.modifierIds.join(",")}:${noteStr ?? ""}`;
     setCart((prev) => {
       const existingIdx = prev.findIndex((c) => c.key === key);
       if (existingIdx >= 0) {
@@ -346,6 +350,7 @@ export function PersonalizedMenuClient({
           modifierIds: params.modifierIds,
           modifierNamesEn: params.modifierNamesEn,
           modifierNamesAr: params.modifierNamesAr,
+          specialInstructions: noteStr,
           personaOwner: params.ownerPersona,
           participantName,
           quantity: 1,
@@ -381,6 +386,7 @@ export function PersonalizedMenuClient({
         quantity: c.quantity,
         participantId,
         participantName: c.participantName,
+        specialInstructions: c.specialInstructions ?? undefined,
       };
     });
 
@@ -463,6 +469,15 @@ export function PersonalizedMenuClient({
             </div>
           )}
 
+          {(isAr ? item.dislikeNoticesAr : item.dislikeNoticesEn).map((notice, nIdx) => (
+            <div
+              key={nIdx}
+              className="rounded-xl bg-amber-500/12 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300"
+            >
+              {notice}
+            </div>
+          ))}
+
           <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
             {pickLocalized(item.dish.descriptionEn, item.dish.descriptionAr, locale)}
           </p>
@@ -492,6 +507,8 @@ export function PersonalizedMenuClient({
                   modifierIds: item.preselectedModifierIds,
                   modifierNamesEn: item.preselectedModifiers.map((m) => m.nameEn),
                   modifierNamesAr: item.preselectedModifiers.map((m) => m.nameAr),
+                  specialInstructions:
+                    item.autoOrderNotesEn.length > 0 ? item.autoOrderNotesEn.join(", ") : null,
                   ownerPersona: persona,
                 })
               }

@@ -1,7 +1,10 @@
 import { PrismaClient, Role, SpiceLevel } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import { DEMO_LEBANESE_CATEGORIES } from "../src/lib/demo/lebanese-menu-data";
+import {
+  DEMO_LEBANESE_CATEGORIES,
+  inferDemoRemovableIngredients,
+} from "../src/lib/demo/lebanese-menu-data";
 
 const prisma = new PrismaClient();
 
@@ -322,6 +325,7 @@ async function main() {
 
       for (const dish of cat.items) {
         const isVerified = dish.verificationStatus === "RESTAURANT_VERIFIED";
+        const removable = dish.removableIngredients ?? inferDemoRemovableIngredients(dish);
         await prisma.menuItem.create({
           data: {
             restaurantId: demoRestaurant.id,
@@ -334,6 +338,8 @@ async function main() {
             portionSize: dish.portionSize,
             ingredientsEn: dish.ingredientsEn,
             ingredientsAr: dish.ingredientsAr,
+            removableIngredients: removable,
+            removableIngredientsVerified: isVerified && removable.length > 0,
             dietTags: dish.dietTags,
             allergens: dish.allergens,
             allergenDataProvided: dish.allergenDataProvided,
@@ -366,9 +372,59 @@ async function main() {
       `✔ Seeded ${seededCount} dishes across ${DEMO_LEBANESE_CATEGORIES.length} categories.`,
     );
   } else {
+    // Idempotently backfill removableIngredients on existing Demo Lebanese Kitchen items after Phase 7.5 upgrade
+    const unpopulated = await prisma.menuItem.findMany({
+      where: {
+        restaurantId: demoRestaurant.id,
+        removableIngredients: { equals: [] },
+      },
+      select: {
+        id: true,
+        nameEn: true,
+        descriptionEn: true,
+        ingredientsEn: true,
+        verificationStatus: true,
+      },
+    });
+    for (const item of unpopulated) {
+      const removable = inferDemoRemovableIngredients(item);
+      if (removable.length > 0) {
+        await prisma.menuItem.update({
+          where: { id: item.id },
+          data: {
+            removableIngredients: removable,
+            removableIngredientsVerified: item.verificationStatus === "RESTAURANT_VERIFIED",
+          },
+        });
+      }
+    }
     console.log(
-      `ℹ Demo menu already has ${existingItemCount} items; skipping duplicate dish insert.`,
+      `ℹ Demo menu already has ${existingItemCount} items; verified removable garnishes up to date.`,
     );
+  }
+
+  // Idempotently connect demo friends (Claude, Bilal, James) as Dining Companions
+  const demoProfiles = await prisma.dinerProfile.findMany({
+    where: { userId: { in: [claude.id, bilal.id, james.id] } },
+    select: { id: true },
+  });
+  const sortedIds = demoProfiles.map((p) => p.id).sort();
+  for (let i = 0; i < sortedIds.length; i++) {
+    for (let j = i + 1; j < sortedIds.length; j++) {
+      await prisma.diningCompanion.upsert({
+        where: {
+          profileAId_profileBId: {
+            profileAId: sortedIds[i]!,
+            profileBId: sortedIds[j]!,
+          },
+        },
+        update: {},
+        create: {
+          profileAId: sortedIds[i]!,
+          profileBId: sortedIds[j]!,
+        },
+      });
+    }
   }
 }
 

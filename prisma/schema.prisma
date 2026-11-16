@@ -83,28 +83,35 @@ model User {
 }
 
 model DinerProfile {
-  id                   String     @id @default(cuid())
-  userId               String?    @unique
-  guestToken           String?    @unique
-  displayName          String
-  dietaryRestrictions  String[]   @default([])
-  allergens            String[]   @default([])
-  likedIngredients     String[]   @default([])
-  dislikedIngredients  String[]   @default([])
-  favoriteCuisines     String[]   @default([])
-  spiceTolerance       SpiceLevel @default(MEDIUM)
-  maxBudgetAed         Decimal?   @db.Decimal(10, 2)
-  preferHighProtein    Boolean    @default(false)
-  preferKeto           Boolean    @default(false)
-  onboardingTranscript Json?
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
+  id                             String     @id @default(cuid())
+  userId                         String?    @unique
+  guestToken                     String?    @unique
+  displayName                    String
+  dietaryRestrictions            String[]   @default([])
+  allergens                      String[]   @default([])
+  likedIngredients               String[]   @default([])
+  dislikedIngredients            String[]   @default([])
+  favoriteCuisines               String[]   @default([])
+  spiceTolerance                 SpiceLevel @default(MEDIUM)
+  maxBudgetAed                   Decimal?   @db.Decimal(10, 2)
+  preferHighProtein              Boolean    @default(false)
+  preferKeto                     Boolean    @default(false)
+  customAvoidIngredients         Json       @default("[]")
+  shareFullProfileWithCompanions Boolean    @default(false)
+  onboardingTranscript           Json?
+  createdAt                      DateTime   @default(now())
+  updatedAt                      DateTime   @updatedAt
 
-  user              User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tableParticipants TableParticipant[]
-  ordersPlaced      Order[]            @relation("PlacedByProfile")
-  ratings           DishRating[]
-  externalScans     ExternalMenuScan[]
+  user                 User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tableParticipants    TableParticipant[]
+  ordersPlaced         Order[]            @relation("PlacedByProfile")
+  ratings              DishRating[]
+  externalScans        ExternalMenuScan[]
+  companionInvitesSent CompanionInvite[]  @relation("CompanionInviter")
+  companionsAsA        DiningCompanion[]  @relation("CompanionProfileA")
+  companionsAsB        DiningCompanion[]  @relation("CompanionProfileB")
+  hostedMealPlans      MealPlan[]         @relation("MealPlanHost")
+  mealPlanMemberships  MealPlanMember[]
 }
 
 model Restaurant {
@@ -134,6 +141,7 @@ model Restaurant {
   invoices      Invoice[]
   scanEvents    MenuScanEvent[]
   aiUsageLogs   AiUsageLog[]
+  mealPlans     MealPlan[]
 
   @@index([ownerId])
   @@index([status])
@@ -192,34 +200,36 @@ model MenuCategory {
 }
 
 model MenuItem {
-  id                   String             @id @default(cuid())
-  restaurantId         String
-  categoryId           String
-  nameEn               String
-  nameAr               String
-  descriptionEn        String?
-  descriptionAr        String?
-  priceAed             Decimal            @db.Decimal(10, 2)
-  portionSize          String?
-  ingredientsEn        String[]           @default([])
-  ingredientsAr        String[]           @default([])
-  dietTags             String[]           @default([])
-  allergens            String[]           @default([])
-  allergenDataProvided Boolean            @default(false)
-  spiceLevel           SpiceLevel         @default(NONE)
-  meatType             MeatType           @default(NONE)
-  verificationStatus   VerificationStatus @default(AI_SUGGESTED)
-  aiConfidence         Decimal?           @db.Decimal(4, 3)
-  verifiedAt           DateTime?
-  verifiedById         String?
-  isAvailable          Boolean            @default(true)
-  isPopular            Boolean            @default(false)
-  isPublished          Boolean            @default(false)
-  cachedBlurbEn        String?
-  cachedBlurbAr        String?
-  imageUrl             String?
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  id                           String             @id @default(cuid())
+  restaurantId                 String
+  categoryId                   String
+  nameEn                       String
+  nameAr                       String
+  descriptionEn                String?
+  descriptionAr                String?
+  priceAed                     Decimal            @db.Decimal(10, 2)
+  portionSize                  String?
+  ingredientsEn                String[]           @default([])
+  ingredientsAr                String[]           @default([])
+  removableIngredients         String[]           @default([])
+  removableIngredientsVerified Boolean            @default(false)
+  dietTags                     String[]           @default([])
+  allergens                    String[]           @default([])
+  allergenDataProvided         Boolean            @default(false)
+  spiceLevel                   SpiceLevel         @default(NONE)
+  meatType                     MeatType           @default(NONE)
+  verificationStatus           VerificationStatus @default(AI_SUGGESTED)
+  aiConfidence                 Decimal?           @db.Decimal(4, 3)
+  verifiedAt                   DateTime?
+  verifiedById                 String?
+  isAvailable                  Boolean            @default(true)
+  isPopular                    Boolean            @default(false)
+  isPublished                  Boolean            @default(false)
+  cachedBlurbEn                String?
+  cachedBlurbAr                String?
+  imageUrl                     String?
+  createdAt                    DateTime           @default(now())
+  updatedAt                    DateTime           @updatedAt
 
   restaurant Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   category   MenuCategory       @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -272,16 +282,18 @@ model DiningTable {
 }
 
 model TableSession {
-  id              String             @id @default(cuid())
-  restaurantId    String
-  tableId         String
-  status          TableSessionStatus @default(OPEN)
-  shareCode       String             @unique
-  cartVersion     Int                @default(1)
-  lastCartOrderId String?
-  lastActivityAt  DateTime           @default(now())
-  createdAt       DateTime           @default(now())
-  closedAt        DateTime?
+  id                 String             @id @default(cuid())
+  restaurantId       String
+  tableId            String
+  status             TableSessionStatus @default(OPEN)
+  shareCode          String             @unique
+  cartVersion        Int                @default(1)
+  lastCartOrderId    String?
+  paymentMode        String             @default("SPLIT_BY_PERSON")
+  payerParticipantId String?
+  lastActivityAt     DateTime           @default(now())
+  createdAt          DateTime           @default(now())
+  closedAt           DateTime?
 
   restaurant   Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   table        DiningTable        @relation(fields: [tableId], references: [id], onDelete: Cascade)
@@ -508,4 +520,61 @@ model AdminAuditLog {
   @@index([createdAt])
   @@index([targetType, targetId])
   @@index([actorUserId, createdAt])
+}
+
+model CompanionInvite {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  inviterProfileId String
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  inviterProfile DinerProfile @relation("CompanionInviter", fields: [inviterProfileId], references: [id], onDelete: Cascade)
+
+  @@index([inviterProfileId])
+}
+
+model DiningCompanion {
+  id         String   @id @default(cuid())
+  profileAId String
+  profileBId String
+  createdAt  DateTime @default(now())
+
+  profileA DinerProfile @relation("CompanionProfileA", fields: [profileAId], references: [id], onDelete: Cascade)
+  profileB DinerProfile @relation("CompanionProfileB", fields: [profileBId], references: [id], onDelete: Cascade)
+
+  @@unique([profileAId, profileBId])
+  @@index([profileBId])
+}
+
+model MealPlan {
+  id                    String   @id @default(cuid())
+  hostProfileId         String
+  restaurantId          String
+  status                String   @default("ACTIVE")
+  appliedTableSessionId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  hostProfile DinerProfile     @relation("MealPlanHost", fields: [hostProfileId], references: [id], onDelete: Cascade)
+  restaurant  Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  members     MealPlanMember[]
+
+  @@index([restaurantId, status])
+  @@index([hostProfileId, status])
+}
+
+model MealPlanMember {
+  id             String   @id @default(cuid())
+  mealPlanId     String
+  dinerProfileId String
+  plannedItems   Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  mealPlan     MealPlan     @relation(fields: [mealPlanId], references: [id], onDelete: Cascade)
+  dinerProfile DinerProfile @relation(fields: [dinerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([mealPlanId, dinerProfileId])
+  @@index([dinerProfileId])
 }

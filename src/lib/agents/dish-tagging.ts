@@ -24,6 +24,7 @@ const rawDishTagResultSchema = z.object({
   index: z.number().int().nonnegative(),
   dietTags: z.array(z.string()).default([]),
   allergens: z.array(z.string()).default([]),
+  removableIngredients: z.array(z.string().trim().min(1).max(60)).max(12).default([]),
   spiceLevel: z.enum(SPICE_LEVELS).default("NONE"),
   meatType: z.enum(MEAT_TYPES).default("NONE"),
   confidence: z.number().min(0).max(1).default(0.8),
@@ -59,6 +60,8 @@ export interface DishTagSuggestion {
   index: number;
   dietTags: string[];
   allergens: string[];
+  removableIngredients: string[];
+  removableIngredientsVerified: false;
   spiceLevel: SpiceLevel;
   meatType: MeatType;
   aiConfidence: string;
@@ -98,6 +101,7 @@ Analyze each dish and return conservative, accurate suggestions in JSON:
       "index": 0,
       "dietTags": string[], // ONLY from: ${CANONICAL_DIET_TAGS.join(", ")}
       "allergens": string[], // ONLY from: ${CANONICAL_ALLERGENS.join(", ")}
+      "removableIngredients": string[], // garnishes/toppings/sauces easily left off on request (e.g. "pickles", "tomato", "onion", "garlic", "parsley") — NEVER core main ingredients!
       "spiceLevel": "NONE" | "MILD" | "MEDIUM" | "HOT",
       "meatType": "NONE" | "CHICKEN" | "BEEF" | "LAMB" | "FISH" | "SHELLFISH" | "OTHER",
       "confidence": number, // 0.0 to 1.0
@@ -167,6 +171,10 @@ Safety rules:
       index: entry.index,
       dietTags,
       allergens,
+      removableIngredients: Array.from(
+        new Set(entry.removableIngredients.map((r) => r.trim().toLowerCase()).filter(Boolean)),
+      ),
+      removableIngredientsVerified: false as const,
       spiceLevel: entry.spiceLevel,
       meatType: entry.meatType,
       aiConfidence: entry.confidence.toFixed(3),

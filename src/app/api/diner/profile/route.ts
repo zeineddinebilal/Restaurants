@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
@@ -8,7 +9,12 @@ import {
 import { getLiveAuthenticatedUser } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
-import { normalizeAllergenList, normalizeDietTagList, SPICE_LEVELS } from "@/lib/menu/taxonomy";
+import { parseCustomAvoidIngredientsJson } from "@/lib/menu/ingredient-synonyms";
+import {
+  normalizeAllergenList,
+  normalizeDinerDietRestrictions,
+  SPICE_LEVELS,
+} from "@/lib/menu/taxonomy";
 import { aedToFils, filsToAedString } from "@/lib/money";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
@@ -16,8 +22,9 @@ const upsertProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(60).default("Guest Diner"),
   dietaryRestrictions: z.array(z.string()).default([]),
   allergens: z.array(z.string()).default([]),
-  likedIngredients: z.array(z.string().trim().min(1).max(50)).max(25).default([]),
-  dislikedIngredients: z.array(z.string().trim().min(1).max(50)).max(25).default([]),
+  customAvoidIngredients: z.array(z.unknown()).max(25).default([]),
+  likedIngredients: z.array(z.string().trim().min(1).max(60)).max(30).default([]),
+  dislikedIngredients: z.array(z.string().trim().min(1).max(60)).max(30).default([]),
   favoriteCuisines: z.array(z.string().trim().min(1).max(50)).max(15).default([]),
   spiceTolerance: z.enum(SPICE_LEVELS).default("MEDIUM"),
   maxBudgetAed: z
@@ -33,6 +40,7 @@ const upsertProfileSchema = z.object({
     }),
   preferHighProtein: z.boolean().default(false),
   preferKeto: z.boolean().default(false),
+  shareFullProfileWithCompanions: z.boolean().default(false),
 });
 
 export async function GET() {
@@ -79,9 +87,8 @@ export async function POST(req: NextRequest) {
   }
 
   const normalizedAllergens = normalizeAllergenList(parsed.allergens);
-  const normalizedDiets = normalizeDietTagList(parsed.dietaryRestrictions).filter(
-    (d) => d === "vegetarian" || d === "vegan" || d === "pescatarian" || d === "halal",
-  );
+  const normalizedDiets = normalizeDinerDietRestrictions(parsed.dietaryRestrictions);
+  const normalizedCustomAvoids = parseCustomAvoidIngredientsJson(parsed.customAvoidIngredients);
 
   const liveUser = await getLiveAuthenticatedUser();
   let newlySignedGuestCookie: string | null = null;
@@ -93,38 +100,42 @@ export async function POST(req: NextRequest) {
         displayName: parsed.displayName,
         dietaryRestrictions: normalizedDiets,
         allergens: normalizedAllergens,
+        customAvoidIngredients: normalizedCustomAvoids as unknown as Prisma.InputJsonValue,
         likedIngredients: parsed.likedIngredients,
         dislikedIngredients: parsed.dislikedIngredients,
         favoriteCuisines: parsed.favoriteCuisines,
         spiceTolerance: parsed.spiceTolerance,
         maxBudgetAed: parsed.maxBudgetAed,
-        preferHighProtein: parsed.preferHighProtein,
-        preferKeto: parsed.preferKeto,
+        preferHighProtein: parsed.preferHighProtein || normalizedDiets.includes("high_protein"),
+        preferKeto: parsed.preferKeto || normalizedDiets.includes("keto"),
+        shareFullProfileWithCompanions: parsed.shareFullProfileWithCompanions,
       },
       create: {
         userId: liveUser.id,
         displayName: parsed.displayName,
         dietaryRestrictions: normalizedDiets,
         allergens: normalizedAllergens,
+        customAvoidIngredients: normalizedCustomAvoids as unknown as Prisma.InputJsonValue,
         likedIngredients: parsed.likedIngredients,
         dislikedIngredients: parsed.dislikedIngredients,
         favoriteCuisines: parsed.favoriteCuisines,
         spiceTolerance: parsed.spiceTolerance,
         maxBudgetAed: parsed.maxBudgetAed,
-        preferHighProtein: parsed.preferHighProtein,
-        preferKeto: parsed.preferKeto,
+        preferHighProtein: parsed.preferHighProtein || normalizedDiets.includes("high_protein"),
+        preferKeto: parsed.preferKeto || normalizedDiets.includes("keto"),
+        shareFullProfileWithCompanions: parsed.shareFullProfileWithCompanions,
       },
     });
 
     return NextResponse.json({
       profile: {
         ...saved,
+        customAvoidIngredients: normalizedCustomAvoids,
         maxBudgetAed: saved.maxBudgetAed ? saved.maxBudgetAed.toFixed(2) : null,
       },
     });
   }
 
-  // Guest Mode: reuse verified guest cookie or mint a new signed guest cookie
   const rawCookie = req.cookies.get(GUEST_COOKIE_NAME)?.value;
   let guestToken = verifySignedGuestCookieValue(rawCookie);
   if (!guestToken) {
@@ -138,32 +149,37 @@ export async function POST(req: NextRequest) {
       displayName: parsed.displayName,
       dietaryRestrictions: normalizedDiets,
       allergens: normalizedAllergens,
+      customAvoidIngredients: normalizedCustomAvoids as unknown as Prisma.InputJsonValue,
       likedIngredients: parsed.likedIngredients,
       dislikedIngredients: parsed.dislikedIngredients,
       favoriteCuisines: parsed.favoriteCuisines,
       spiceTolerance: parsed.spiceTolerance,
       maxBudgetAed: parsed.maxBudgetAed,
-      preferHighProtein: parsed.preferHighProtein,
-      preferKeto: parsed.preferKeto,
+      preferHighProtein: parsed.preferHighProtein || normalizedDiets.includes("high_protein"),
+      preferKeto: parsed.preferKeto || normalizedDiets.includes("keto"),
+      shareFullProfileWithCompanions: parsed.shareFullProfileWithCompanions,
     },
     create: {
       guestToken,
       displayName: parsed.displayName,
       dietaryRestrictions: normalizedDiets,
       allergens: normalizedAllergens,
+      customAvoidIngredients: normalizedCustomAvoids as unknown as Prisma.InputJsonValue,
       likedIngredients: parsed.likedIngredients,
       dislikedIngredients: parsed.dislikedIngredients,
       favoriteCuisines: parsed.favoriteCuisines,
       spiceTolerance: parsed.spiceTolerance,
       maxBudgetAed: parsed.maxBudgetAed,
-      preferHighProtein: parsed.preferHighProtein,
-      preferKeto: parsed.preferKeto,
+      preferHighProtein: parsed.preferHighProtein || normalizedDiets.includes("high_protein"),
+      preferKeto: parsed.preferKeto || normalizedDiets.includes("keto"),
+      shareFullProfileWithCompanions: parsed.shareFullProfileWithCompanions,
     },
   });
 
   const res = NextResponse.json({
     profile: {
       ...savedGuest,
+      customAvoidIngredients: normalizedCustomAvoids,
       maxBudgetAed: savedGuest.maxBudgetAed ? savedGuest.maxBudgetAed.toFixed(2) : null,
     },
   });

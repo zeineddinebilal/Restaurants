@@ -46,6 +46,8 @@ export interface SerializedMenuItem {
   portionSize: string | null;
   ingredientsEn: string[];
   ingredientsAr: string[];
+  removableIngredients: string[];
+  removableIngredientsVerified: boolean;
   dietTags: string[];
   allergens: string[];
   allergenDataProvided: boolean;
@@ -77,6 +79,8 @@ interface IngestReviewItem {
   portionSize: string;
   ingredientsEn: string[];
   ingredientsAr: string[];
+  removableIngredients: string[];
+  removableIngredientsVerified: boolean;
   dietTags: string[];
   allergens: string[];
   allergenDataProvided: boolean;
@@ -141,6 +145,8 @@ export function MenuBuilderClient({
     portionSize: string;
     ingredientsEnText: string;
     ingredientsArText: string;
+    removableIngredientsText: string;
+    removableIngredientsVerified: boolean;
     dietTags: string[];
     allergens: string[];
     allergenDataProvided: boolean;
@@ -197,6 +203,8 @@ export function MenuBuilderClient({
         nameAr: cat.nameAr,
         items: cat.items.map((it) => ({
           ...it,
+          removableIngredients: it.removableIngredients ?? [],
+          removableIngredientsVerified: false,
           allergenDataProvided: false,
           verifyNow: false,
         })),
@@ -392,6 +400,8 @@ export function MenuBuilderClient({
       portionSize: "Regular",
       ingredientsEnText: "",
       ingredientsArText: "",
+      removableIngredientsText: "",
+      removableIngredientsVerified: false,
       dietTags: ["halal"],
       allergens: [],
       // Must default to false until the human explicitly ticks the confirmation checkbox
@@ -418,6 +428,8 @@ export function MenuBuilderClient({
       portionSize: item.portionSize ?? "",
       ingredientsEnText: item.ingredientsEn.join(", "),
       ingredientsArText: item.ingredientsAr.join("، "),
+      removableIngredientsText: item.removableIngredients.join(", "),
+      removableIngredientsVerified: item.removableIngredientsVerified,
       dietTags: [...item.dietTags],
       allergens: [...item.allergens],
       allergenDataProvided: item.allergenDataProvided,
@@ -459,6 +471,7 @@ export function MenuBuilderClient({
       items?: Array<{
         dietTags: string[];
         allergens: string[];
+        removableIngredients?: string[];
         spiceLevel: SpiceLevel;
         meatType: MeatType;
         suggestedModifiers: SerializedModifier[];
@@ -475,6 +488,10 @@ export function MenuBuilderClient({
       ...editingItem,
       dietTags: suggestion.dietTags,
       allergens: suggestion.allergens,
+      removableIngredientsText: suggestion.removableIngredients?.length
+        ? suggestion.removableIngredients.join(", ")
+        : editingItem.removableIngredientsText,
+      removableIngredientsVerified: false,
       spiceLevel: suggestion.spiceLevel,
       meatType: suggestion.meatType,
       // AI suggestions NEVER count as human-confirmed allergen data
@@ -527,6 +544,10 @@ export function MenuBuilderClient({
       .split(/[،,]/)
       .map((s) => s.trim())
       .filter(Boolean);
+    const removableIngredients = editingItem.removableIngredientsText
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
 
     const payload = {
       categoryId: editingItem.categoryId,
@@ -538,6 +559,8 @@ export function MenuBuilderClient({
       portionSize: editingItem.portionSize || null,
       ingredientsEn,
       ingredientsAr,
+      removableIngredients,
+      removableIngredientsVerified: verifyAndSave || editingItem.removableIngredientsVerified,
       dietTags: editingItem.dietTags,
       allergens: editingItem.allergens,
       allergenDataProvided: editingItem.allergenDataProvided,
@@ -1335,6 +1358,37 @@ export function MenuBuilderClient({
                     className="w-full min-h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 text-sm"
                   />
                 </div>
+              </div>
+
+              <div className="space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3">
+                <label className="block text-xs font-semibold">
+                  Removable Garnishes / Soft-Dislike Ingredients (comma-separated, e.g. pickles,
+                  onion, tomato)
+                </label>
+                <input
+                  value={editingItem.removableIngredientsText}
+                  onChange={(e) =>
+                    setEditingItem({ ...editingItem, removableIngredientsText: e.target.value })
+                  }
+                  placeholder="pickles, onion, garlic, tomato, parsley"
+                  className="w-full min-h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-2 text-sm"
+                />
+                <label className="inline-flex items-center gap-2 text-xs font-medium">
+                  <input
+                    type="checkbox"
+                    checked={editingItem.removableIngredientsVerified}
+                    onChange={(e) =>
+                      setEditingItem({
+                        ...editingItem,
+                        removableIngredientsVerified: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    Confirm kitchen can omit these garnishes on request (for soft dislikes only —
+                    never used for allergies)
+                  </span>
+                </label>
               </div>
 
               {/* Dish Photo Upload */}

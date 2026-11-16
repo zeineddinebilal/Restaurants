@@ -5,17 +5,29 @@ import { wrapUntrustedText } from "@/lib/agents/guardrails";
 import { normalizeAiPriceToAed } from "@/lib/agents/menu-ingestion";
 import type { Locale } from "@/lib/i18n/dictionaries";
 import {
+  buildCustomAvoidIngredient,
+  type CustomAvoidIngredient,
+} from "@/lib/menu/ingredient-synonyms";
+import {
+  ALL_DINER_DIETS,
   CANONICAL_ALLERGENS,
-  CANONICAL_DIET_TAGS,
   normalizeAllergenList,
-  normalizeDietTagList,
+  normalizeDinerDietRestrictions,
   SPICE_LEVELS,
 } from "@/lib/menu/taxonomy";
+
+const rawCustomAvoidSchema = z.object({
+  key: z.string().trim().min(1).max(60),
+  labelEn: z.string().trim().min(1).max(80),
+  labelAr: z.string().trim().min(1).max(80),
+  terms: z.array(z.string().trim().min(1).max(80)).min(1).max(16),
+});
 
 const rawTasteProfileSchema = z.object({
   reply: z.string().trim().min(1).max(500),
   dietaryRestrictions: z.array(z.string()).default([]),
   allergens: z.array(z.string()).default([]),
+  customAvoidIngredients: z.array(rawCustomAvoidSchema).max(15).default([]),
   likedIngredients: z.array(z.string().trim().min(1)).default([]),
   dislikedIngredients: z.array(z.string().trim().min(1)).default([]),
   favoriteCuisines: z.array(z.string().trim().min(1)).default([]),
@@ -30,6 +42,7 @@ export interface TasteProfileAgentOutput {
   patch: {
     dietaryRestrictions: string[];
     allergens: string[];
+    customAvoidIngredients: CustomAvoidIngredient[];
     likedIngredients: string[];
     dislikedIngredients: string[];
     favoriteCuisines: string[];
@@ -42,7 +55,9 @@ export interface TasteProfileAgentOutput {
 
 /**
  * Agent 3: Taste Profile Agent
- * Turns a diner's friendly natural-language message into a structured DinerProfile patch.
+ * Turns a diner's natural-language text (including "Other" diets, non-canonical allergies like
+ * tomato/garlic/MSG, and colloquial dislikes like "that green herb in tabbouleh") into a
+ * structured DinerProfile patch for the diner's explicit Confirmation Screen.
  */
 export async function runTasteProfileAgent(params: {
   message: string;
@@ -51,18 +66,27 @@ export async function runTasteProfileAgent(params: {
   callerKey?: string | null;
   clientIp?: string | null;
 }): Promise<AgentCallResult<TasteProfileAgentOutput>> {
-  const systemInstruction = `You are the Taste Profile Agent for a UAE dining personalization app (currency: AED).
-Convert the diner's message into a structured JSON profile patch and a warm 1-2 sentence reply in ${params.locale === "ar" ? "Arabic" : "English"}.
-JSON schema:
+  const systemInstruction = `You are the Taste Profile Agent for a UAE dining safety & personalization app (currency: AED).
+Interpret the diner's free-text answers into a structured JSON profile patch and a friendly 1-2 sentence confirmation reply in ${params.locale === "ar" ? "Arabic" : "English"}.
+Distinguish carefully between HARD medical/religious restrictions vs SOFT taste dislikes:
+1. "dietaryRestrictions": ONLY from [${ALL_DINER_DIETS.join(", ")}] (map pork-free -> "no_pork", beef-free -> "no_beef", no red meat -> "no_red_meat", diabetic/low-sugar -> "low_sugar", gluten-free diet -> "gluten_free_lifestyle").
+2. "allergens": ONLY canonical allergens from [${CANONICAL_ALLERGENS.join(", ")}] (lactose/dairy -> "milk", wheat/celiac -> "gluten", tahini -> "sesame").
+3. "customAvoidIngredients": For ANY hard allergy/intolerance/strict avoidance that is NOT in the 15 canonical allergens (e.g. "tomato allergy", "garlic intolerance", "I react to MSG", "mushroom allergy"), output objects:
+   { "key": "tomato", "labelEn": "tomato", "labelAr": "طماطم", "terms": ["tomato", "tomatoes", "طماطم", "بندورة"] }
+   Always include singular, plural, English, and common Arabic/Levantine synonyms in "terms"!
+4. "dislikedIngredients": Soft taste dislikes (e.g. "I don't like pickles", "that green herb in tabbouleh" -> "parsley", "raw onion"). Do NOT put soft dislikes in allergens or customAvoidIngredients!
+5. "likedIngredients": Ingredients/flavors they enjoy (resolve descriptions like "that green herb in tabbouleh" -> "parsley", "garlic dip" -> "garlic").
+Output JSON matching:
 {
   "reply": string,
-  "dietaryRestrictions": string[], // ONLY from: ${CANONICAL_DIET_TAGS.filter((d) => d !== "keto" && d !== "high_protein").join(", ")}
-  "allergens": string[], // ONLY from: ${CANONICAL_ALLERGENS.join(", ")} (map lactose/dairy intolerance to "milk", wheat/celiac to "gluten")
+  "dietaryRestrictions": string[],
+  "allergens": string[],
+  "customAvoidIngredients": [{ "key": string, "labelEn": string, "labelAr": string, "terms": string[] }],
   "likedIngredients": string[],
   "dislikedIngredients": string[],
   "favoriteCuisines": string[],
   "spiceTolerance": "NONE" | "MILD" | "MEDIUM" | "HOT",
-  "maxBudgetAed": "XX.XX" | null, // whole-meal budget in AED if mentioned, else null
+  "maxBudgetAed": "XX.XX" | null,
   "preferHighProtein": boolean,
   "preferKeto": boolean
 }`;
@@ -70,7 +94,7 @@ JSON schema:
   const rawResult = await runStructuredAgent({
     agentName: "tasteProfileAgent",
     systemInstruction,
-    contents: wrapUntrustedText(params.message.trim(), 1500),
+    contents: wrapUntrustedText(params.message.trim(), 2000),
     schema: rawTasteProfileSchema,
     userId: params.userId,
     callerKey: params.callerKey,
@@ -89,24 +113,31 @@ JSON schema:
     maxBudgetAed = cleaned && cleaned !== "0.00" ? cleaned : null;
   }
 
-  const dietTags = normalizeDietTagList(rawResult.data.dietaryRestrictions);
+  const normalizedDiets = normalizeDinerDietRestrictions(rawResult.data.dietaryRestrictions);
+  const customAvoidIngredients = rawResult.data.customAvoidIngredients.map((c) =>
+    buildCustomAvoidIngredient(c.key, {
+      labelEn: c.labelEn,
+      labelAr: c.labelAr,
+      terms: c.terms,
+    }),
+  );
 
   return {
     ...rawResult,
     data: {
       reply: rawResult.data.reply,
       patch: {
-        dietaryRestrictions: dietTags.filter(
-          (d) => d === "vegetarian" || d === "vegan" || d === "pescatarian" || d === "halal",
-        ),
+        dietaryRestrictions: normalizedDiets,
         allergens: normalizeAllergenList(rawResult.data.allergens),
-        likedIngredients: rawResult.data.likedIngredients.slice(0, 15),
-        dislikedIngredients: rawResult.data.dislikedIngredients.slice(0, 15),
+        customAvoidIngredients,
+        likedIngredients: rawResult.data.likedIngredients.slice(0, 20),
+        dislikedIngredients: rawResult.data.dislikedIngredients.slice(0, 20),
         favoriteCuisines: rawResult.data.favoriteCuisines.slice(0, 10),
         spiceTolerance: rawResult.data.spiceTolerance,
         maxBudgetAed,
-        preferHighProtein: rawResult.data.preferHighProtein ?? dietTags.includes("high_protein"),
-        preferKeto: rawResult.data.preferKeto ?? dietTags.includes("keto"),
+        preferHighProtein:
+          rawResult.data.preferHighProtein ?? normalizedDiets.includes("high_protein"),
+        preferKeto: rawResult.data.preferKeto ?? normalizedDiets.includes("keto"),
       },
     },
   };

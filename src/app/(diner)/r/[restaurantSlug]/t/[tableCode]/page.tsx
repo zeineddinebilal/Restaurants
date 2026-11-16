@@ -99,6 +99,8 @@ export default async function PersonalizedTableMenuPage({
       portionSize: item.portionSize,
       ingredientsEn: item.ingredientsEn,
       ingredientsAr: item.ingredientsAr,
+      removableIngredients: item.removableIngredients,
+      removableIngredientsVerified: item.removableIngredientsVerified,
       dietTags: item.dietTags,
       allergens: item.allergens,
       allergenDataProvided: item.allergenDataProvided,

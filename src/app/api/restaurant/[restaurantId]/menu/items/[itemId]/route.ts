@@ -48,6 +48,8 @@ const updateItemSchema = z.object({
   portionSize: z.string().trim().max(80).nullable().optional(),
   ingredientsEn: z.array(z.string().trim().min(1)).optional(),
   ingredientsAr: z.array(z.string().trim().min(1)).optional(),
+  removableIngredients: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+  removableIngredientsVerified: z.boolean().optional(),
   dietTags: z.array(z.string()).optional(),
   allergens: z.array(z.string()).optional(),
   allergenDataProvided: z.boolean().optional(),
@@ -210,6 +212,16 @@ export async function PATCH(
           parsed.data.portionSize !== undefined ? parsed.data.portionSize : existing.portionSize,
         ingredientsEn: nextIngredientsEn,
         ingredientsAr: nextIngredientsAr,
+        removableIngredients:
+          parsed.data.removableIngredients !== undefined
+            ? parsed.data.removableIngredients.map((r) => r.trim().toLowerCase())
+            : existing.removableIngredients,
+        removableIngredientsVerified:
+          parsed.data.removableIngredientsVerified !== undefined
+            ? parsed.data.removableIngredientsVerified
+            : parsed.data.reverify && isNowVerified
+              ? true
+              : existing.removableIngredientsVerified,
         dietTags: nextDietTags,
         allergens: nextAllergens,
         allergenDataProvided: nextAllergenDataProvided,

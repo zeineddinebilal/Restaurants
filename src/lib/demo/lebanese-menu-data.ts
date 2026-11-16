@@ -18,6 +18,7 @@ export interface DemoSeedDish {
   portionSize: string;
   ingredientsEn: string[];
   ingredientsAr: string[];
+  removableIngredients?: string[];
   dietTags: string[];
   allergens: string[];
   allergenDataProvided: boolean;
@@ -26,6 +27,48 @@ export interface DemoSeedDish {
   verificationStatus: VerificationStatus;
   isPopular?: boolean;
   modifiers?: DemoSeedModifier[];
+}
+
+const DEMO_GARNISH_CANDIDATES = [
+  "pickles",
+  "tomato",
+  "onion",
+  "garlic",
+  "parsley",
+  "mint",
+  "olives",
+  "pomegranate",
+  "coriander",
+] as const;
+
+export function inferDemoRemovableIngredients(dish: {
+  nameEn: string;
+  descriptionEn?: string | null;
+  ingredientsEn: readonly string[];
+}): string[] {
+  const coreTitle = (dish.nameEn.split(/\bwith\b/i)[0] ?? dish.nameEn).toLowerCase();
+  const body = [...dish.ingredientsEn, dish.descriptionEn ?? ""].join(" , ").toLowerCase();
+  const out: string[] = [];
+
+  for (const cand of DEMO_GARNISH_CANDIDATES) {
+    // Tabbouleh's core herb is parsley even though "parsley" isn't in the English word "Tabbouleh"
+    if (cand === "parsley" && coreTitle.includes("tabbouleh")) continue;
+    if (cand === "garlic" && (coreTitle.includes("toum") || coreTitle.includes("hummus"))) continue;
+    if (coreTitle.includes(cand) || coreTitle.includes(cand.replace(/s$/, ""))) continue;
+
+    if (cand === "olives") {
+      const withoutOil = body.split("olive oil").join(" ");
+      if (/\bolives?\b/.test(withoutOil)) out.push("olives");
+      continue;
+    }
+
+    const stem = cand.replace(/s$/, "");
+    if (new RegExp(`\\b${stem}(es|s)?\\b`).test(body)) {
+      out.push(cand);
+    }
+  }
+
+  return out;
 }
 
 export interface DemoSeedCategory {

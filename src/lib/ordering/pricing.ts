@@ -202,23 +202,39 @@ export interface ParticipantBillShare {
 export function computeTableBillSplit(params: {
   participants: ReadonlyArray<{ id: string; displayName: string }>;
   lines: ReadonlyArray<{ participantId: string | null; lineTotalFils: number }>;
+  paymentMode?: "SPLIT_BY_PERSON" | "ONE_PERSON_PAYS_ALL";
+  payerParticipantId?: string | null;
 }): {
+  paymentMode: "SPLIT_BY_PERSON" | "ONE_PERSON_PAYS_ALL";
+  payerParticipantId: string | null;
   sharedPoolFils: number;
   totalFils: number;
   totalAed: string;
   shares: ParticipantBillShare[];
 } {
-  const { participants, lines } = params;
+  const {
+    participants,
+    lines,
+    paymentMode = "SPLIT_BY_PERSON",
+    payerParticipantId = null,
+  } = params;
   const totalFils = lines.reduce((s, l) => s + l.lineTotalFils, 0);
 
   if (participants.length === 0) {
     return {
+      paymentMode,
+      payerParticipantId: null,
       sharedPoolFils: totalFils,
       totalFils,
       totalAed: filsToAedString(totalFils),
       shares: [],
     };
   }
+
+  const resolvedPayerId =
+    paymentMode === "ONE_PERSON_PAYS_ALL"
+      ? (participants.find((p) => p.id === payerParticipantId)?.id ?? participants[0]!.id)
+      : null;
 
   const personalByParticipant = new Map<string, number>();
   for (const p of participants) {
@@ -242,7 +258,12 @@ export function computeTableBillSplit(params: {
   const shares: ParticipantBillShare[] = participants.map((p, idx) => {
     const personalFils = personalByParticipant.get(p.id) ?? 0;
     const sharedShareFils = evenSharedSplits[idx] ?? 0;
-    const personTotal = personalFils + sharedShareFils;
+    const personTotal =
+      paymentMode === "ONE_PERSON_PAYS_ALL"
+        ? p.id === resolvedPayerId
+          ? totalFils
+          : 0
+        : personalFils + sharedShareFils;
     return {
       participantId: p.id,
       displayName: p.displayName,
@@ -254,6 +275,8 @@ export function computeTableBillSplit(params: {
   });
 
   return {
+    paymentMode,
+    payerParticipantId: resolvedPayerId,
     sharedPoolFils,
     totalFils,
     totalAed: filsToAedString(totalFils),

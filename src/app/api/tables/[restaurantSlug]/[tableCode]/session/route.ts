@@ -6,8 +6,10 @@ import {
   verifySignedGuestCookieValue,
 } from "@/lib/auth/guest";
 import { prisma } from "@/lib/db";
+import { applyActiveMealPlanToTableSession } from "@/lib/diner/companions";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
 import { type EngineDishInput, evaluateGroupSharedDishes } from "@/lib/engine/menu-engine";
+import { parseCustomAvoidIngredientsJson } from "@/lib/menu/ingredient-synonyms";
 import { computeTableBillSplit, priceOrderFromDatabase } from "@/lib/ordering/pricing";
 import {
   buildTableAccessGrant,
@@ -36,6 +38,12 @@ const sessionMutationSchema = z.discriminatedUnion("action", [
     k: z.string().optional(),
     participantId: z.string().min(1),
     cartItems: z.array(cartLineSchema).max(30),
+  }),
+  z.object({
+    action: z.literal("set_payment_mode"),
+    k: z.string().optional(),
+    paymentMode: z.enum(["SPLIT_BY_PERSON", "ONE_PERSON_PAYS_ALL"]),
+    payerParticipantId: z.string().nullable().optional(),
   }),
 ]);
 
@@ -149,6 +157,25 @@ export async function GET(
     });
   }
 
+  // If this diner has an ACTIVE pre-planned group meal for this restaurant, auto-join companions
+  // and pre-load planned picks now that the physical table token `k` has been verified!
+  if (activeDiner.profile?.id) {
+    await applyActiveMealPlanToTableSession({
+      restaurantId: restaurant.id,
+      tableSessionId: session.id,
+      triggerProfileId: activeDiner.profile.id,
+    });
+  }
+
+  const latestSession = await prisma.tableSession.findUnique({
+    where: { id: session.id },
+  });
+  const effectivePaymentMode =
+    latestSession?.paymentMode === "ONE_PERSON_PAYS_ALL"
+      ? "ONE_PERSON_PAYS_ALL"
+      : "SPLIT_BY_PERSON";
+  const effectivePayerId = latestSession?.payerParticipantId ?? null;
+
   const participants = await prisma.tableParticipant.findMany({
     where: { tableSessionId: session.id },
     orderBy: { joinedAt: "asc" },
@@ -172,6 +199,8 @@ export async function GET(
       portionSize: item.portionSize,
       ingredientsEn: item.ingredientsEn,
       ingredientsAr: item.ingredientsAr,
+      removableIngredients: item.removableIngredients,
+      removableIngredientsVerified: item.removableIngredientsVerified,
       dietTags: item.dietTags,
       allergens: item.allergens,
       allergenDataProvided: item.allergenDataProvided,
@@ -224,10 +253,12 @@ export async function GET(
       participantId: l.participantId,
       lineTotalFils: l.lineTotalFils,
     })),
+    paymentMode: effectivePaymentMode,
+    payerParticipantId: effectivePayerId,
   });
 
   const personalFilsByParticipant = new Map(
-    billSplit.shares.map((s) => [s.participantId, s.totalFils]),
+    billSplit.shares.map((s) => [s.participantId, s.personalFils + s.sharedShareFils]),
   );
 
   const groupEngine = evaluateGroupSharedDishes({
@@ -240,6 +271,9 @@ export async function GET(
         displayName: p.displayName,
         dietaryRestrictions: p.dinerProfile?.dietaryRestrictions ?? [],
         allergens: p.dinerProfile?.allergens ?? [],
+        customAvoidIngredients: parseCustomAvoidIngredientsJson(
+          p.dinerProfile?.customAvoidIngredients,
+        ),
         likedIngredients: p.dinerProfile?.likedIngredients ?? [],
         dislikedIngredients: p.dinerProfile?.dislikedIngredients ?? [],
         spiceTolerance: p.dinerProfile?.spiceTolerance ?? "MEDIUM",
@@ -394,6 +428,29 @@ export async function POST(
       data: { lastActivityAt: new Date() },
     });
 
+    const res = NextResponse.json({ ok: true });
+    res.cookies.set(TABLE_ACCESS_COOKIE_NAME, encodeSignedSessionList([...cookieEntries, grant]), {
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 24 * 60 * 60,
+    });
+    return res;
+  }
+
+  if (parsed.data.action === "set_payment_mode") {
+    await prisma.tableSession.update({
+      where: { id: session.id },
+      data: {
+        paymentMode: parsed.data.paymentMode,
+        payerParticipantId:
+          parsed.data.paymentMode === "ONE_PERSON_PAYS_ALL"
+            ? (parsed.data.payerParticipantId ?? null)
+            : null,
+        lastActivityAt: new Date(),
+      },
+    });
     const res = NextResponse.json({ ok: true });
     res.cookies.set(TABLE_ACCESS_COOKIE_NAME, encodeSignedSessionList([...cookieEntries, grant]), {
       path: "/",

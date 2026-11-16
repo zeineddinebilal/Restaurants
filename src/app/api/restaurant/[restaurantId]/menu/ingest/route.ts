@@ -179,6 +179,8 @@ export async function POST(
         portionSize: item.portionSize,
         ingredientsEn: item.ingredientsEn,
         ingredientsAr: item.ingredientsAr,
+        removableIngredients: tag?.removableIngredients ?? [],
+        removableIngredientsVerified: false,
         dietTags: tag?.dietTags ?? [],
         allergens: tag?.allergens ?? [],
         allergenDataProvided: false,

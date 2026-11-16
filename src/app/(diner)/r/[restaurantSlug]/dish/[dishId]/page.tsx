@@ -72,6 +72,8 @@ export default async function DishDetailPage({
         portionSize: dish.portionSize,
         ingredientsEn: dish.ingredientsEn,
         ingredientsAr: dish.ingredientsAr,
+        removableIngredients: dish.removableIngredients,
+        removableIngredientsVerified: dish.removableIngredientsVerified,
         dietTags: dish.dietTags,
         allergens: dish.allergens,
         allergenDataProvided: dish.allergenDataProvided,

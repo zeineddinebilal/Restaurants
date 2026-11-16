@@ -20,6 +20,7 @@ export default async function OnboardingPage({
   return (
     <DinerProfileBuilder
       locale={locale}
+      mode="onboarding"
       initialProfile={profile}
       aiConfigured={aiConfigured}
       returnTo={sp.returnTo}

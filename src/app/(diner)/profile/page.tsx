@@ -20,6 +20,7 @@ export default async function DinerProfilePage({
   return (
     <DinerProfileBuilder
       locale={locale}
+      mode="profile"
       initialProfile={profile}
       aiConfigured={aiConfigured}
       returnTo={sp.returnTo}

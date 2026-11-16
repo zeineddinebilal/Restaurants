@@ -1,5 +1,17 @@
 import type { MeatType, SpiceLevel, VerificationStatus } from "@prisma/client";
-import { normalizeAllergenList, normalizeDietTagList } from "@/lib/menu/taxonomy";
+import {
+  type CustomAvoidIngredient,
+  parseCustomAvoidIngredientsJson,
+  resolveIngredientSynonyms,
+  textContainsIngredientSynonyms,
+} from "@/lib/menu/ingredient-synonyms";
+import {
+  HARD_DINER_DIETS,
+  type HardDinerDiet,
+  normalizeAllergenList,
+  normalizeDietTagList,
+  normalizeDinerDietRestrictions,
+} from "@/lib/menu/taxonomy";
 import { validateModifierForVerification } from "@/lib/menu/verification";
 import { aedToFils, computeRemainingBudgetFils, filsToAedString, formatAed } from "@/lib/money";
 
@@ -26,6 +38,8 @@ export interface EngineDishInput {
   portionSize?: string | null;
   ingredientsEn: readonly string[];
   ingredientsAr: readonly string[];
+  removableIngredients?: readonly string[];
+  removableIngredientsVerified?: boolean;
   dietTags: readonly string[];
   allergens: readonly string[] | null | undefined;
   allergenDataProvided: boolean;
@@ -45,6 +59,7 @@ export interface EngineDinerProfile {
   displayName?: string;
   dietaryRestrictions: readonly string[];
   allergens: readonly string[];
+  customAvoidIngredients?: ReadonlyArray<CustomAvoidIngredient | string>;
   likedIngredients?: readonly string[];
   dislikedIngredients?: readonly string[];
   spiceTolerance?: SpiceLevel;
@@ -71,6 +86,10 @@ export interface EvaluatedMenuItem {
   badges: MenuBadge[];
   preselectedModifierIds: string[];
   preselectedModifiers: EngineModifierInput[];
+  omittedDislikedIngredients: string[];
+  autoOrderNotesEn: string[];
+  dislikeNoticesEn: string[];
+  dislikeNoticesAr: string[];
   basePriceFils: number;
   effectivePriceFils: number;
   effectivePriceAed: string;
@@ -93,10 +112,14 @@ export interface PersonalizedMenuResult {
   hidden: EvaluatedMenuItem[];
 }
 
+const HARD_DIET_SET = new Set<string>(HARD_DINER_DIETS);
+const PORK_TERMS = ["pork", "bacon", "ham", "lard", "prosciutto", "pepperoni", "خنزير", "بيكون"];
+const BEEF_TERMS = ["beef", "veal", "steak", "brisket", "بقري", "عجل", "ستيك"];
+const LAMB_TERMS = ["lamb", "mutton", "غنم", "ضأن", "خاروف"];
+
 function expandDinerAllergens(raw: readonly string[]): Set<string> {
   const normalized = normalizeAllergenList(raw);
   const expanded = new Set<string>(normalized);
-  // Shellfish umbrella protects against crustaceans & molluscs and vice-versa
   if (expanded.has("shellfish")) {
     expanded.add("crustaceans");
     expanded.add("molluscs");
@@ -107,19 +130,37 @@ function expandDinerAllergens(raw: readonly string[]): Set<string> {
   return expanded;
 }
 
+function extractHardDiets(raw: readonly string[]): HardDinerDiet[] {
+  return normalizeDinerDietRestrictions(raw).filter((d): d is HardDinerDiet =>
+    HARD_DIET_SET.has(d),
+  );
+}
+
+function buildDishAllText(dish: EngineDishInput): string {
+  return [
+    dish.nameEn,
+    dish.nameAr,
+    dish.descriptionEn ?? "",
+    dish.descriptionAr ?? "",
+    ...(dish.ingredientsEn ?? []),
+    ...(dish.ingredientsAr ?? []),
+  ].join(" , ");
+}
+
 function evaluateConflictsAgainstState(params: {
   dinerAllergens: ReadonlySet<string>;
-  dinerDiets: readonly string[];
+  dinerDiets: readonly HardDinerDiet[];
   dishAllergens: readonly string[];
   dishDiets: readonly string[];
   meatType: MeatType;
+  dishAllText: string;
 }): {
   conflictingAllergens: string[];
   conflictingDiets: string[];
   reasonsEn: string[];
   reasonsAr: string[];
 } {
-  const { dinerAllergens, dinerDiets, dishAllergens, dishDiets, meatType } = params;
+  const { dinerAllergens, dinerDiets, dishAllergens, dishDiets, meatType, dishAllText } = params;
   const dishAllergenSet = new Set(dishAllergens);
   const dishDietSet = new Set(dishDiets);
 
@@ -181,6 +222,35 @@ function evaluateConflictsAgainstState(params: {
         reasonsEn.push("Not tagged halal");
         reasonsAr.push("غير مصنف كحلال");
       }
+    } else if (diet === "no_pork") {
+      const mentionsPork = textContainsIngredientSynonyms(dishAllText, PORK_TERMS);
+      if (mentionsPork || (meatType === "OTHER" && !dishDietSet.has("halal"))) {
+        conflictingDiets.push("no_pork");
+        reasonsEn.push("May contain pork");
+        reasonsAr.push("قد يحتوي على لحم خنزير");
+      }
+    } else if (diet === "no_beef") {
+      if (meatType === "BEEF" || textContainsIngredientSynonyms(dishAllText, BEEF_TERMS)) {
+        conflictingDiets.push("no_beef");
+        reasonsEn.push("Contains beef");
+        reasonsAr.push("يحتوي على لحم بقري");
+      }
+    } else if (diet === "no_red_meat") {
+      if (
+        meatType === "BEEF" ||
+        meatType === "LAMB" ||
+        textContainsIngredientSynonyms(dishAllText, [...BEEF_TERMS, ...LAMB_TERMS])
+      ) {
+        conflictingDiets.push("no_red_meat");
+        reasonsEn.push("Contains red meat");
+        reasonsAr.push("يحتوي على لحوم حمراء");
+      }
+    } else if (diet === "gluten_free_lifestyle") {
+      if (dishAllergenSet.has("gluten")) {
+        conflictingDiets.push("gluten_free_lifestyle");
+        reasonsEn.push("Contains gluten");
+        reasonsAr.push("يحتوي على الغلوتين");
+      }
     }
   }
 
@@ -189,19 +259,19 @@ function evaluateConflictsAgainstState(params: {
 
 /**
  * Finds a single restaurant-verified, safety-valid modifier that resolves ALL
- * hard conflicts for the diner on `dish`.
+ * hard allergen & diet conflicts for the diner on `dish`.
+ * Note: `customAvoidIngredients` are NEVER unlocked by generic modifiers or `removableIngredients`.
  */
 function findVerifiedUnlockModifier(params: {
   dish: EngineDishInput;
   dishAllergens: readonly string[];
   dishDiets: readonly string[];
   dinerAllergens: ReadonlySet<string>;
-  dinerDiets: readonly string[];
+  dinerDiets: readonly HardDinerDiet[];
+  dishAllText: string;
 }): EngineModifierInput | null {
-  const { dish, dishAllergens, dishDiets, dinerAllergens, dinerDiets } = params;
+  const { dish, dishAllergens, dishDiets, dinerAllergens, dinerDiets, dishAllText } = params;
 
-  // A modifier can only unlock a conflicting dish as safe when the parent dish itself
-  // has confirmed allergen data and is RESTAURANT_VERIFIED.
   if (!dish.allergenDataProvided || dish.verificationStatus !== "RESTAURANT_VERIFIED") {
     return null;
   }
@@ -211,7 +281,6 @@ function findVerifiedUnlockModifier(params: {
       continue;
     }
 
-    // Enforce the exact same modifier consistency rules as Phase 3 Fix 3
     const validity = validateModifierForVerification(
       {
         allergens: dishAllergens,
@@ -225,7 +294,6 @@ function findVerifiedUnlockModifier(params: {
     }
 
     const removedSet = new Set(validity.normalizedRemovesAllergens);
-    // Expand shellfish removals consistently only if explicitly removed
     const postAllergens = dishAllergens.filter((a) => !removedSet.has(a));
     const postDiets = Array.from(new Set([...dishDiets, ...validity.normalizedAddsDietTags]));
 
@@ -235,6 +303,7 @@ function findVerifiedUnlockModifier(params: {
       dishAllergens: postAllergens,
       dishDiets: postDiets,
       meatType: dish.meatType,
+      dishAllText,
     });
 
     if (
@@ -248,6 +317,30 @@ function findVerifiedUnlockModifier(params: {
   return null;
 }
 
+function isCoreDishIngredient(
+  dish: EngineDishInput,
+  terms: readonly string[],
+  excludePhrases: readonly string[],
+): boolean {
+  // Strip trailing "with ..." / "مع ..." garnish clauses from title before checking core identity
+  const coreTitleEn = dish.nameEn.split(/\bwith\b/i)[0] ?? dish.nameEn;
+  const coreTitleAr = dish.nameAr.split(/\sمع\s/)[0] ?? dish.nameAr;
+
+  if (
+    textContainsIngredientSynonyms(coreTitleEn, terms, excludePhrases) ||
+    textContainsIngredientSynonyms(coreTitleAr, terms, excludePhrases)
+  ) {
+    return true;
+  }
+
+  const ingEn = dish.ingredientsEn ?? [];
+  if (ingEn.length === 1 && textContainsIngredientSynonyms(ingEn[0]!, terms, excludePhrases)) {
+    return true;
+  }
+
+  return false;
+}
+
 const SPICE_RANK: Record<SpiceLevel, number> = {
   NONE: 0,
   MILD: 1,
@@ -258,10 +351,15 @@ const SPICE_RANK: Record<SpiceLevel, number> = {
 /**
  * Deterministic Personalized Menu Engine (Zero LLM calls on page load).
  *
- * Step 1: Hard deterministic filter (allergies, intolerances, strict diets, modifier unlock,
- *         missing allergen data = UNVERIFIED_WARNING, no-restriction diners = zero safety badges).
- * Step 2: Meal-level remaining-budget check & soft preference scoring.
- * Step 3: One-line EN/AR "Why this is for you" blurbs (cached or deterministic).
+ * Step 1: Hard deterministic filter:
+ *         - Canonical allergens + strict diets + verified modifier unlock
+ *         - Custom hard avoidances (`customAvoidIngredients`) across EN/AR ingredients + synonyms
+ *           (missing ingredient list => `UNVERIFIED_WARNING`, never safe; never unlocked by `removableIngredients`)
+ * Step 2: Soft dislikes (`dislikedIngredients` + `removableIngredients`):
+ *         - Confirmed removable non-core ingredient => normal rank (0 penalty), "Comes with X — we'll ask for it without", auto "No X" order note
+ *         - Unknown removability non-core ingredient => light downrank (-6), "Ask your server if it can be made without X"
+ *         - Core ingredient of dish (e.g. Pickle Platter, Tomato Soup) => heavy downrank (-25)
+ * Step 3: Meal-level remaining-budget check & soft preference scoring.
  */
 export function evaluatePersonalizedMenu(params: {
   dishes: readonly EngineDishInput[];
@@ -271,10 +369,14 @@ export function evaluatePersonalizedMenu(params: {
   const { dishes, profile, currentCartTotalFils = 0 } = params;
 
   const dinerAllergens = expandDinerAllergens(profile.allergens);
-  const hardDiets = normalizeDietTagList(profile.dietaryRestrictions).filter(
-    (d) => d === "vegetarian" || d === "vegan" || d === "pescatarian" || d === "halal",
+  const allDinerDiets = normalizeDinerDietRestrictions(profile.dietaryRestrictions);
+  const hardDiets = extractHardDiets(profile.dietaryRestrictions);
+  const customAvoids = parseCustomAvoidIngredientsJson(
+    Array.isArray(profile.customAvoidIngredients) ? profile.customAvoidIngredients : [],
   );
-  const hasHardRestrictions = dinerAllergens.size > 0 || hardDiets.length > 0;
+
+  const hasHardRestrictions =
+    dinerAllergens.size > 0 || hardDiets.length > 0 || customAvoids.length > 0;
 
   const maxBudgetFils =
     profile.maxBudgetAed !== undefined &&
@@ -288,12 +390,20 @@ export function evaluatePersonalizedMenu(params: {
       ? computeRemainingBudgetFils(maxBudgetFils, Math.max(0, currentCartTotalFils))
       : null;
 
-  const likedLower = (profile.likedIngredients ?? [])
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  const dislikedLower = (profile.dislikedIngredients ?? [])
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+  const likedResolved = (profile.likedIngredients ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => resolveIngredientSynonyms(s));
+  const dislikedResolved = (profile.dislikedIngredients ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => resolveIngredientSynonyms(s));
+
+  const preferLowSugar = allDinerDiets.includes("low_sugar");
+  const preferKeto = Boolean(profile.preferKeto || allDinerDiets.includes("keto"));
+  const preferHighProtein = Boolean(
+    profile.preferHighProtein || allDinerDiets.includes("high_protein"),
+  );
   const dinerSpice = profile.spiceTolerance ?? "MEDIUM";
 
   const visibleEvaluated: EvaluatedMenuItem[] = [];
@@ -307,30 +417,78 @@ export function evaluatePersonalizedMenu(params: {
     const basePriceFils = aedToFils(dish.priceAed);
     const hasAllergenArray = Array.isArray(dish.allergens);
     const missingAllergenData = !dish.allergenDataProvided || !hasAllergenArray;
+    const hasIngredientData =
+      (dish.ingredientsEn?.length ?? 0) > 0 || (dish.ingredientsAr?.length ?? 0) > 0;
     const normalizedDishAllergens = hasAllergenArray ? normalizeAllergenList(dish.allergens!) : [];
     const normalizedDishDiets = normalizeDietTagList(dish.dietTags);
+    const dishAllText = buildDishAllText(dish);
 
     let safetyState: DishSafetyState = "NO_RESTRICTIONS";
     let preselectedModifiers: EngineModifierInput[] = [];
     let effectivePriceFils = basePriceFils;
 
     if (hasHardRestrictions) {
+      // 1a. Evaluate customAvoidIngredients (strict hard filter across EN/AR + synonyms; never removable!)
+      const customConflictEn: string[] = [];
+      const customConflictAr: string[] = [];
+
+      for (const custom of customAvoids) {
+        const syn = resolveIngredientSynonyms(custom);
+        if (textContainsIngredientSynonyms(dishAllText, syn.terms, syn.excludePhrases)) {
+          customConflictEn.push(`Contains ${syn.labelEn}`);
+          customConflictAr.push(`يحتوي على ${syn.labelAr}`);
+        }
+      }
+
+      if (customConflictEn.length > 0) {
+        hidden.push({
+          dish,
+          safetyState: "HIDDEN",
+          badges: [],
+          preselectedModifierIds: [],
+          preselectedModifiers: [],
+          omittedDislikedIngredients: [],
+          autoOrderNotesEn: [],
+          dislikeNoticesEn: [],
+          dislikeNoticesAr: [],
+          basePriceFils,
+          effectivePriceFils,
+          effectivePriceAed: filsToAedString(effectivePriceFils),
+          withinRemainingBudget:
+            remainingBudgetFils === null || effectivePriceFils <= remainingBudgetFils,
+          score: -1000,
+          hiddenReasonsEn: customConflictEn,
+          hiddenReasonsAr: customConflictAr,
+          whyForYouEn: "",
+          whyForYouAr: "",
+        });
+        continue;
+      }
+
+      // 1b. Evaluate canonical allergens & hard diets
       const baseConflicts = evaluateConflictsAgainstState({
         dinerAllergens,
         dinerDiets: hardDiets,
         dishAllergens: normalizedDishAllergens,
         dishDiets: normalizedDishDiets,
         meatType: dish.meatType,
+        dishAllText,
       });
 
       const hasBaseConflict =
         baseConflicts.conflictingAllergens.length > 0 || baseConflicts.conflictingDiets.length > 0;
 
+      // If diner relies on customAvoidIngredients or meat-ingredient text matching, missing ingredient data = UNVERIFIED_WARNING!
+      const missingRequiredCustomIngredientData = customAvoids.length > 0 && !hasIngredientData;
+
       if (!hasBaseConflict) {
-        if (!missingAllergenData && dish.verificationStatus === "RESTAURANT_VERIFIED") {
+        if (
+          !missingAllergenData &&
+          !missingRequiredCustomIngredientData &&
+          dish.verificationStatus === "RESTAURANT_VERIFIED"
+        ) {
           safetyState = "VERIFIED_SAFE";
         } else {
-          // Missing allergen data OR AI_SUGGESTED is NEVER shown as safe to a restricted diner
           safetyState = "UNVERIFIED_WARNING";
         }
       } else {
@@ -340,23 +498,29 @@ export function evaluatePersonalizedMenu(params: {
           dishDiets: normalizedDishDiets,
           dinerAllergens,
           dinerDiets: hardDiets,
+          dishAllText,
         });
 
         if (unlockMod) {
-          safetyState = "SAFE_WITH_MODIFIER";
+          safetyState = missingRequiredCustomIngredientData
+            ? "UNVERIFIED_WARNING"
+            : "SAFE_WITH_MODIFIER";
           preselectedModifiers = [unlockMod];
           effectivePriceFils = Math.max(0, basePriceFils + aedToFils(unlockMod.priceDeltaAed));
         } else {
-          const effectivePriceAed = filsToAedString(effectivePriceFils);
           hidden.push({
             dish,
             safetyState: "HIDDEN",
             badges: [],
             preselectedModifierIds: [],
             preselectedModifiers: [],
+            omittedDislikedIngredients: [],
+            autoOrderNotesEn: [],
+            dislikeNoticesEn: [],
+            dislikeNoticesAr: [],
             basePriceFils,
             effectivePriceFils,
-            effectivePriceAed,
+            effectivePriceAed: filsToAedString(effectivePriceFils),
             withinRemainingBudget:
               remainingBudgetFils === null || effectivePriceFils <= remainingBudgetFils,
             score: -1000,
@@ -370,7 +534,7 @@ export function evaluatePersonalizedMenu(params: {
       }
     }
 
-    // Soft scoring & remaining meal budget evaluation
+    // Step 2: Soft scoring, dislikes ("without X"), & remaining meal budget evaluation
     const withinRemainingBudget =
       remainingBudgetFils === null || effectivePriceFils <= remainingBudgetFils;
 
@@ -388,15 +552,11 @@ export function evaluatePersonalizedMenu(params: {
       score -= 25;
     }
 
-    const searchableText = [dish.nameEn, dish.descriptionEn ?? "", ...(dish.ingredientsEn ?? [])]
-      .join(" ")
-      .toLowerCase();
-
     const matchedLikes: string[] = [];
-    for (const liked of likedLower) {
-      if (searchableText.includes(liked)) {
+    for (const liked of likedResolved) {
+      if (textContainsIngredientSynonyms(dishAllText, liked.terms, liked.excludePhrases)) {
         score += 15;
-        matchedLikes.push(liked);
+        matchedLikes.push(liked.labelEn);
       }
     }
     if (matchedLikes.length > 0) {
@@ -404,9 +564,35 @@ export function evaluatePersonalizedMenu(params: {
       reasonsAr.push("يناسب مكوناتك المفضلة");
     }
 
-    for (const disliked of dislikedLower) {
-      if (searchableText.includes(disliked)) {
-        score -= 20;
+    // Soft dislikes: never hide; convert confirmed removable garnishes to "without X" with 0 score penalty!
+    const omittedDislikedIngredients: string[] = [];
+    const autoOrderNotesEn: string[] = [];
+    const dislikeNoticesEn: string[] = [];
+    const dislikeNoticesAr: string[] = [];
+    const removableText = (dish.removableIngredients ?? []).join(" , ");
+
+    for (const disliked of dislikedResolved) {
+      if (!textContainsIngredientSynonyms(dishAllText, disliked.terms, disliked.excludePhrases)) {
+        continue;
+      }
+
+      if (isCoreDishIngredient(dish, disliked.terms, disliked.excludePhrases)) {
+        // Core of the dish (e.g. "Pickle Platter", "Tomato Soup") -> downrank significantly
+        score -= 25;
+      } else if (
+        dish.removableIngredientsVerified === true &&
+        textContainsIngredientSynonyms(removableText, disliked.terms, disliked.excludePhrases)
+      ) {
+        // Confirmed removable garnish -> rank normally (0 penalty!) and auto-add "No X"
+        omittedDislikedIngredients.push(disliked.labelEn);
+        autoOrderNotesEn.push(`No ${disliked.labelEn}`);
+        dislikeNoticesEn.push(`Comes with ${disliked.labelEn} — we'll ask for it without`);
+        dislikeNoticesAr.push(`يُقدم مع ${disliked.labelAr} — سنطلبه بدونه`);
+      } else {
+        // Removability unknown -> light downrank only (-6) + server prompt
+        score -= 6;
+        dislikeNoticesEn.push(`Ask your server if it can be made without ${disliked.labelEn}`);
+        dislikeNoticesAr.push(`اسأل النادل إن كان بالإمكان تحضيره بدون ${disliked.labelAr}`);
       }
     }
 
@@ -417,15 +603,36 @@ export function evaluatePersonalizedMenu(params: {
       score -= 10;
     }
 
-    if (profile.preferHighProtein && normalizedDishDiets.includes("high_protein")) {
+    if (preferHighProtein && normalizedDishDiets.includes("high_protein")) {
       score += 12;
       reasonsEn.push("High protein");
       reasonsAr.push("عالي البروتين");
     }
-    if (profile.preferKeto && normalizedDishDiets.includes("keto")) {
+    if (preferKeto && normalizedDishDiets.includes("keto")) {
       score += 12;
       reasonsEn.push("Keto-friendly");
       reasonsAr.push("مناسب للكيتو");
+    }
+    if (preferLowSugar) {
+      const mentionsSugar = textContainsIngredientSynonyms(dishAllText, [
+        "sugar",
+        "syrup",
+        "rose syrup",
+        "date syrup",
+        "molasses",
+        "سكر",
+        "قطر",
+      ]);
+      if (
+        normalizedDishDiets.includes("low_sugar") ||
+        (!mentionsSugar && normalizedDishDiets.includes("keto"))
+      ) {
+        score += 12;
+        reasonsEn.push("Low-sugar friendly");
+        reasonsAr.push("مناسب لقليلي السكر");
+      } else if (mentionsSugar) {
+        score -= 18;
+      }
     }
 
     if (dish.isPopular) {
@@ -446,7 +653,6 @@ export function evaluatePersonalizedMenu(params: {
     if (remainingBudgetFils !== null) {
       if (withinRemainingBudget) {
         score += 30;
-        // Extra value bonus for affordable picks leaving comfortable headroom
         const savingsRatioPts = Math.min(
           15,
           Math.trunc(
@@ -462,7 +668,6 @@ export function evaluatePersonalizedMenu(params: {
     }
 
     const badges: MenuBadge[] = [];
-    // Safety badges ONLY appear when the diner has hard restrictions
     if (hasHardRestrictions) {
       if (safetyState === "VERIFIED_SAFE") badges.push("VERIFIED_SAFE");
       if (safetyState === "SAFE_WITH_MODIFIER") badges.push("SAFE_WITH_MODIFIER");
@@ -492,6 +697,10 @@ export function evaluatePersonalizedMenu(params: {
       badges,
       preselectedModifierIds: preselectedModifiers.map((m) => m.id),
       preselectedModifiers,
+      omittedDislikedIngredients,
+      autoOrderNotesEn,
+      dislikeNoticesEn,
+      dislikeNoticesAr,
       basePriceFils,
       effectivePriceFils,
       effectivePriceAed: filsToAedString(effectivePriceFils),
@@ -504,7 +713,6 @@ export function evaluatePersonalizedMenu(params: {
     });
   }
 
-  // Assign "BEST_VALUE" badge to the most affordable within-budget dishes
   const withinBudgetList = visibleEvaluated.filter((item) => item.withinRemainingBudget);
   if (withinBudgetList.length > 0) {
     const sortedPrices = withinBudgetList.map((i) => i.effectivePriceFils).sort((a, b) => a - b);
@@ -521,7 +729,6 @@ export function evaluatePersonalizedMenu(params: {
     }
   }
 
-  // Sort deterministically by score DESC, then effectivePriceFils ASC, then nameEn ASC
   visibleEvaluated.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     if (a.effectivePriceFils !== b.effectivePriceFils) {
@@ -533,7 +740,6 @@ export function evaluatePersonalizedMenu(params: {
   const inBudgetRanked = visibleEvaluated.filter((i) => i.withinRemainingBudget);
   const overBudgetRanked = visibleEvaluated.filter((i) => !i.withinRemainingBudget);
 
-  // Top Picks ("Perfect for you"): top-scoring non-unverified within-budget items (up to 8)
   const perfectForYou: EvaluatedMenuItem[] = [];
   const goodOptions: EvaluatedMenuItem[] = [];
 
@@ -545,7 +751,6 @@ export function evaluatePersonalizedMenu(params: {
     }
   }
 
-  // Fallback if a diner has neutral preferences and nothing crossed 60 pts
   if (perfectForYou.length === 0 && goodOptions.length > 0) {
     const promoteCount = Math.min(5, goodOptions.length);
     for (let i = 0; i < promoteCount; i++) {
@@ -572,6 +777,9 @@ export interface GroupSharedDish {
   effectivePriceFils: number;
   effectivePriceAed: string;
   requiredModifiers: EngineModifierInput[];
+  autoOrderNotesEn: string[];
+  dislikeNoticesEn: string[];
+  dislikeNoticesAr: string[];
   hasUnverifiedWarning: boolean;
   combinedScore: number;
 }
@@ -579,7 +787,8 @@ export interface GroupSharedDish {
 /**
  * Deterministic Group Table Intersection:
  * Finds all dishes that EVERY participant at the table can eat (none hidden),
- * verifying that any required modifiers are mutually compatible across all members.
+ * verifying that any required modifiers are mutually compatible across all members,
+ * and merging any "without X" dislike customizations across the group.
  */
 export function evaluateGroupSharedDishes(params: {
   dishes: readonly EngineDishInput[];
@@ -608,7 +817,6 @@ export function evaluateGroupSharedDishes(params: {
     return { sharedDishes: [], perPersonMenus };
   }
 
-  // Index visible evaluated items per person by dishId
   const visibleMapByPerson = participants.map((p) => {
     const res = perPersonMenus[p.id]!;
     const map = new Map<string, EvaluatedMenuItem>();
@@ -637,16 +845,19 @@ export function evaluateGroupSharedDishes(params: {
 
     if (!compatibleForAll) continue;
 
-    // Collect union of preselected safety modifiers required by any restricted member
     const modById = new Map<string, EngineModifierInput>();
+    const autoNotesSet = new Set<string>();
+    const dislikeEnSet = new Set<string>();
+    const dislikeArSet = new Set<string>();
+
     for (const ev of memberEvaluations) {
-      for (const m of ev.preselectedModifiers) {
-        modById.set(m.id, m);
-      }
+      for (const m of ev.preselectedModifiers) modById.set(m.id, m);
+      for (const n of ev.autoOrderNotesEn) autoNotesSet.add(n);
+      for (const n of ev.dislikeNoticesEn) dislikeEnSet.add(n);
+      for (const n of ev.dislikeNoticesAr) dislikeArSet.add(n);
     }
     const requiredModifiers = Array.from(modById.values());
 
-    // If multiple distinct modifiers were required, verify the combined state still satisfies all members
     if (requiredModifiers.length > 0) {
       const removedAll = new Set(
         requiredModifiers.flatMap((m) => normalizeAllergenList(m.removesAllergens)),
@@ -659,13 +870,12 @@ export function evaluateGroupSharedDishes(params: {
       const postDiets = Array.from(
         new Set([...normalizeDietTagList(dish.dietTags), ...addedDietsAll]),
       );
+      const dishAllText = buildDishAllText(dish);
 
       let postValidForAll = true;
       for (const p of participants) {
         const dAllergens = expandDinerAllergens(p.profile.allergens);
-        const dDiets = normalizeDietTagList(p.profile.dietaryRestrictions).filter(
-          (d) => d === "vegetarian" || d === "vegan" || d === "pescatarian" || d === "halal",
-        );
+        const dDiets = extractHardDiets(p.profile.dietaryRestrictions);
         if (dAllergens.size === 0 && dDiets.length === 0) continue;
 
         const c = evaluateConflictsAgainstState({
@@ -674,6 +884,7 @@ export function evaluateGroupSharedDishes(params: {
           dishAllergens: postAllergens,
           dishDiets: postDiets,
           meatType: dish.meatType,
+          dishAllText,
         });
         if (c.conflictingAllergens.length > 0 || c.conflictingDiets.length > 0) {
           postValidForAll = false;
@@ -699,6 +910,9 @@ export function evaluateGroupSharedDishes(params: {
       effectivePriceFils,
       effectivePriceAed: filsToAedString(effectivePriceFils),
       requiredModifiers,
+      autoOrderNotesEn: Array.from(autoNotesSet),
+      dislikeNoticesEn: Array.from(dislikeEnSet),
+      dislikeNoticesAr: Array.from(dislikeArSet),
       hasUnverifiedWarning,
       combinedScore: avgScore,
     });
