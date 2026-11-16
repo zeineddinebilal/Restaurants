@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { isLocale } from "@/lib/i18n/dictionaries";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(80),
@@ -14,8 +14,7 @@ const registerSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const forwarded = req.headers.get("x-forwarded-for");
-  const clientIp = forwarded?.split(",")[0]?.trim() || "unknown";
+  const clientIp = getClientIp(req.headers);
 
   const rl = checkRateLimit({
     key: `register:${clientIp}`,

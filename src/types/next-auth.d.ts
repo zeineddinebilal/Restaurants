@@ -5,6 +5,7 @@ declare module "next-auth" {
   interface User {
     role?: Role;
     locale?: "en" | "ar";
+    isActive?: boolean;
   }
 
   interface Session {
@@ -12,6 +13,7 @@ declare module "next-auth" {
       id: string;
       role: Role;
       locale: "en" | "ar";
+      isActive: boolean;
     } & DefaultSession["user"];
   }
 }

@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"prisma/**/*.ts\" && prisma format",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"prisma/**/*.ts\"",
-    "test": "tsx --test \"src/**/__tests__/**/*.test.ts\"",
+    "test": "prisma generate && tsx --test \"src/**/__tests__/**/*.test.ts\"",
     "test:watch": "tsx --test --watch \"src/**/__tests__/**/*.test.ts\"",
     "test:e2e": "playwright test",
     "db:generate": "prisma generate",

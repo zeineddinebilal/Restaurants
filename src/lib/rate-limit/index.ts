@@ -11,7 +11,34 @@ interface Bucket {
 const buckets = new Map<string, Bucket>();
 
 /**
- * In-memory sliding-window rate limiter used for auth, order creation
+ * Extracts a trustworthy client IP from request headers behind Render's proxy.
+ * 1. Prefers Render's `true-client-ip` header when present.
+ * 2. Falls back to the LAST entry of `x-forwarded-for` (appended by the edge proxy,
+ *    preventing client-spoofed leading entries from bypassing rate limits).
+ * 3. Falls back to `"unknown"`.
+ */
+export function getClientIp(headers: Pick<Headers, "get">): string {
+  const trueClientIp = headers.get("true-client-ip")?.trim();
+  if (trueClientIp) {
+    return trueClientIp;
+  }
+
+  const xff = headers.get("x-forwarded-for");
+  if (xff) {
+    const parts = xff
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length > 0) {
+      return parts[parts.length - 1]!;
+    }
+  }
+
+  return "unknown";
+}
+
+/**
+ * In-memory per-instance sliding-window rate limiter used for auth, order creation
  * (per guestToken and per tableId), and AI endpoints.
  */
 export function checkRateLimit(params: {
@@ -39,7 +66,6 @@ export function checkRateLimit(params: {
   validTimestamps.push(nowMs);
   buckets.set(key, { timestamps: validTimestamps });
 
-  // Periodic lightweight cleanup to bound memory
   if (buckets.size > 5000) {
     for (const [k, b] of buckets.entries()) {
       const pruned = b.timestamps.filter((t) => t > windowStart);

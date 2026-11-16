@@ -1,7 +1,9 @@
 import type { Role } from "@prisma/client";
+import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
+import { isLocale } from "@/lib/i18n/dictionaries";
 
 export interface AuthenticatedUser {
   id: string;
@@ -9,6 +11,7 @@ export interface AuthenticatedUser {
   name?: string | null;
   role: Role;
   locale: "en" | "ar";
+  isActive: boolean;
 }
 
 export function hasAllowedRole(userRole: Role, allowedRoles: readonly Role[]): boolean {
@@ -29,39 +32,129 @@ export function getDefaultHomeForRole(role: Role): string {
   }
 }
 
-export async function requireApiRole(
-  allowedRoles: readonly Role[],
-): Promise<{ ok: true; user: AuthenticatedUser } | { ok: false; response: NextResponse }> {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: "Authentication required" }, { status: 401 }),
-    };
+/**
+ * Pure authorization check used by both API routes and page guards.
+ * Rejects missing sessions, inactive accounts, and unauthorized roles.
+ */
+export function evaluateRoleGuard(params: {
+  user: AuthenticatedUser | null | undefined;
+  allowedRoles: readonly Role[];
+}):
+  | { ok: true; user: AuthenticatedUser }
+  | { ok: false; status: 401 | 403; reason: "UNAUTHENTICATED" | "INACTIVE" | "FORBIDDEN" } {
+  const { user, allowedRoles } = params;
+  if (!user?.id) {
+    return { ok: false, status: 401, reason: "UNAUTHENTICATED" };
   }
-
-  if (!hasAllowedRole(session.user.role, allowedRoles)) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: "Forbidden for current role" }, { status: 403 }),
-    };
+  if (!user.isActive) {
+    return { ok: false, status: 403, reason: "INACTIVE" };
   }
-
-  return {
-    ok: true,
-    user: {
-      id: session.user.id,
-      email: session.user.email,
-      name: session.user.name,
-      role: session.user.role,
-      locale: session.user.locale,
-    },
-  };
+  if (!hasAllowedRole(user.role, allowedRoles)) {
+    return { ok: false, status: 403, reason: "FORBIDDEN" };
+  }
+  return { ok: true, user };
 }
 
 /**
- * Enforces that a user is either ADMIN or owns / is an active staff member
- * of the specified restaurantId. Prevents cross-restaurant data leakage.
+ * Resolves the live user record from DB for the active session so role changes
+ * or account suspensions take effect immediately on guarded pages and API routes.
+ */
+export async function getLiveAuthenticatedUser(): Promise<AuthenticatedUser | null> {
+  const session = await auth();
+  if (!session?.user?.id || session.user.isActive === false) {
+    return null;
+  }
+
+  const dbUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      locale: true,
+      isActive: true,
+    },
+  });
+
+  if (!dbUser) {
+    return null;
+  }
+
+  return {
+    id: dbUser.id,
+    email: dbUser.email,
+    name: dbUser.name,
+    role: dbUser.role,
+    locale: isLocale(dbUser.locale) ? dbUser.locale : "en",
+    isActive: dbUser.isActive,
+  };
+}
+
+export async function requireApiRole(
+  allowedRoles: readonly Role[],
+): Promise<{ ok: true; user: AuthenticatedUser } | { ok: false; response: NextResponse }> {
+  const liveUser = await getLiveAuthenticatedUser();
+  const check = evaluateRoleGuard({ user: liveUser, allowedRoles });
+
+  if (!check.ok) {
+    const message =
+      check.reason === "UNAUTHENTICATED"
+        ? "Authentication required"
+        : check.reason === "INACTIVE"
+          ? "Account is suspended or inactive"
+          : "Forbidden for current role";
+    return {
+      ok: false,
+      response: NextResponse.json({ error: message }, { status: check.status }),
+    };
+  }
+
+  return { ok: true, user: check.user };
+}
+
+/**
+ * Server Component page guard that enforces authentication, active status, and role.
+ */
+export async function requirePageRole(allowedRoles: readonly Role[]): Promise<AuthenticatedUser> {
+  const liveUser = await getLiveAuthenticatedUser();
+  if (!liveUser || !liveUser.isActive) {
+    redirect("/login");
+  }
+  if (!hasAllowedRole(liveUser.role, allowedRoles)) {
+    redirect(getDefaultHomeForRole(liveUser.role));
+  }
+  return liveUser;
+}
+
+export function evaluateRestaurantMembership(params: {
+  userId: string;
+  userRole: Role;
+  ownerOnly?: boolean;
+  restaurant: {
+    ownerId: string;
+    activeMemberUserIds: readonly string[];
+  } | null;
+}): boolean {
+  if (params.userRole === "ADMIN") {
+    return Boolean(params.restaurant);
+  }
+  if (!params.restaurant) {
+    return false;
+  }
+  if (params.restaurant.ownerId === params.userId) {
+    return true;
+  }
+  if (params.ownerOnly) {
+    return false;
+  }
+  return params.restaurant.activeMemberUserIds.includes(params.userId);
+}
+
+/**
+ * Enforces that a user is either ADMIN, the restaurant owner, or an ACTIVE (`isActive: true`)
+ * staff member of `restaurantId`. Prevents cross-restaurant access and immediately blocks
+ * deactivated staff.
  */
 export async function canAccessRestaurant(params: {
   userId: string;
@@ -69,24 +162,26 @@ export async function canAccessRestaurant(params: {
   restaurantId: string;
   ownerOnly?: boolean;
 }): Promise<boolean> {
-  if (params.userRole === "ADMIN") {
-    return true;
-  }
-
   const restaurant = await prisma.restaurant.findUnique({
     where: { id: params.restaurantId },
     select: {
       ownerId: true,
       members: {
-        where: { userId: params.userId },
-        select: { role: true },
+        where: { userId: params.userId, isActive: true },
+        select: { userId: true },
       },
     },
   });
 
-  if (!restaurant) return false;
-  if (restaurant.ownerId === params.userId) return true;
-  if (params.ownerOnly) return false;
-
-  return restaurant.members.length > 0;
+  return evaluateRestaurantMembership({
+    userId: params.userId,
+    userRole: params.userRole,
+    ownerOnly: params.ownerOnly,
+    restaurant: restaurant
+      ? {
+          ownerId: restaurant.ownerId,
+          activeMemberUserIds: restaurant.members.map((m) => m.userId),
+        }
+      : null,
+  });
 }

@@ -63,7 +63,9 @@ Restaurants pay **`min(AED 1.00, 10% × order subtotal)`** (round half up) only 
 3. Render reads `render.yaml` and provisions:
    - **`platefit-db`** (PostgreSQL): Defaults to `plan: basic-256mb` (Render's paid starter tier) because **Render's `free` PostgreSQL databases expire after 30 days**. For temporary free evaluation, change `plan: basic-256mb` to `plan: free` in `render.yaml`.
    - **`platefit-web`** (Node Web Service):
+     - Builds with `npm ci --include=dev && npm run build` so Prisma CLI, Tailwind CSS, TypeScript, and `tsx` remain available when `NODE_ENV=production`.
      - Runs `npx prisma migrate deploy && npm run start` in `startCommand` so migrations always execute before server startup on **both** free and paid web plans (`preDeployCommand` only runs on paid web instances).
      - Monitored via `/api/health` (verifies both app liveness and PostgreSQL connectivity).
+     - Uses an in-memory per-instance sliding-window rate limiter (appropriate for a single Render web service instance; client IP extraction prefers Render's `true-client-ip`, falling back to the last entry of `x-forwarded-for`).
      - Dish photo uploads require S3 env vars (`S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) in production; local `public/uploads` fallback is restricted strictly to `NODE_ENV=development` because Render's container filesystem is ephemeral.
 4. Set secret environment variables prompted by Render (`GEMINI_API_KEY`; optionally `DEMO_MODE`, `SEED_DEMO`, `DEMO_PASSWORD`, and S3 credentials).
