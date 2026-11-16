@@ -120,7 +120,14 @@ export async function POST(req: NextRequest) {
     clientIp,
   });
   if (!quota.allowed) {
-    return NextResponse.json({ error: quota.reason }, { status: 429 });
+    return NextResponse.json(
+      {
+        error:
+          "Menu photo scanner has reached today's usage limit. Please try again later or ask restaurant staff.",
+        reason: "AI_QUOTA_EXCEEDED",
+      },
+      { status: 429 },
+    );
   }
 
   let runningBytes = 0;
@@ -150,7 +157,11 @@ export async function POST(req: NextRequest) {
 
   if (!result.ok) {
     const status = httpStatusForAgentError(result.reason);
-    return NextResponse.json({ error: result.message, reason: result.reason }, { status });
+    const safeError =
+      result.reason === "AI_QUOTA_EXCEEDED"
+        ? "Menu photo scanner has reached today's usage limit. Please try again later."
+        : "Menu photo scanner is temporarily unavailable. Please ask restaurant staff about ingredients.";
+    return NextResponse.json({ error: safeError, reason: result.reason }, { status });
   }
 
   const finalLabel = customLabel || result.data.sourceLabel || "Menu Screenshot";

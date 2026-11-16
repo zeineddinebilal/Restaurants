@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { httpStatusForAgentError } from "@/lib/agents/gemini";
-import { runGroupTableAgent } from "@/lib/agents/group-table";
+import { buildDeterministicGroupTableFallback, runGroupTableAgent } from "@/lib/agents/group-table";
 import { verifySignedGuestCookieValue, GUEST_COOKIE_NAME } from "@/lib/auth/guest";
 import { prisma } from "@/lib/db";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
@@ -158,33 +157,40 @@ export async function POST(
     })),
   );
 
+  const mappedParticipants = participants.map((p) => ({
+    id: p.id,
+    name: p.displayName,
+    profile: {
+      displayName: p.displayName,
+      dietaryRestrictions: p.dinerProfile?.dietaryRestrictions ?? [],
+      allergens: p.dinerProfile?.allergens ?? [],
+      likedIngredients: p.dinerProfile?.likedIngredients ?? [],
+      dislikedIngredients: p.dinerProfile?.dislikedIngredients ?? [],
+      spiceTolerance: p.dinerProfile?.spiceTolerance ?? "MEDIUM",
+      maxBudgetAed: p.dinerProfile?.maxBudgetAed ? p.dinerProfile.maxBudgetAed.toFixed(2) : null,
+      preferHighProtein: p.dinerProfile?.preferHighProtein ?? false,
+      preferKeto: p.dinerProfile?.preferKeto ?? false,
+    },
+  }));
+
   const result = await runGroupTableAgent({
     restaurantId: restaurant.id,
     locale: parsed.data.locale,
     dishes: engineDishes,
-    participants: participants.map((p) => ({
-      id: p.id,
-      name: p.displayName,
-      profile: {
-        displayName: p.displayName,
-        dietaryRestrictions: p.dinerProfile?.dietaryRestrictions ?? [],
-        allergens: p.dinerProfile?.allergens ?? [],
-        likedIngredients: p.dinerProfile?.likedIngredients ?? [],
-        dislikedIngredients: p.dinerProfile?.dislikedIngredients ?? [],
-        spiceTolerance: p.dinerProfile?.spiceTolerance ?? "MEDIUM",
-        maxBudgetAed: p.dinerProfile?.maxBudgetAed ? p.dinerProfile.maxBudgetAed.toFixed(2) : null,
-        preferHighProtein: p.dinerProfile?.preferHighProtein ?? false,
-        preferKeto: p.dinerProfile?.preferKeto ?? false,
-      },
-    })),
+    participants: mappedParticipants,
     userId: activeDiner.userId,
     callerKey,
     clientIp,
   });
 
   if (!result.ok) {
-    const status = httpStatusForAgentError(result.reason);
-    return NextResponse.json({ error: result.message, reason: result.reason }, { status });
+    // Graceful deterministic fallback for ANY AI failure so diners still receive verified table suggestions
+    const fallbackPlan = buildDeterministicGroupTableFallback({
+      locale: parsed.data.locale,
+      dishes: engineDishes,
+      participants: mappedParticipants,
+    });
+    return NextResponse.json(fallbackPlan);
   }
 
   return NextResponse.json(result.data);

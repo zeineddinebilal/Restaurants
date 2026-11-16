@@ -130,6 +130,9 @@ export function DinerProfileBuilder({
     setFeedback(null);
 
     try {
+      const combinedFreePrefs =
+        [freePreferencesText.trim(), chatInput.trim()].filter(Boolean).join(". ") || undefined;
+
       const res = await fetch("/api/diner/taste-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -137,7 +140,7 @@ export function DinerProfileBuilder({
           message: combinedMessage,
           otherDietText: otherDietText.trim() || undefined,
           otherAllergyText: otherAllergyText.trim() || undefined,
-          freePreferencesText: freePreferencesText.trim() || chatInput.trim() || undefined,
+          freePreferencesText: combinedFreePrefs,
           locale,
           allowFallback: true,
         }),

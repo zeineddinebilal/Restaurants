@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { httpStatusForAgentError } from "@/lib/agents/gemini";
-import { runTasteProfileAgent } from "@/lib/agents/taste-profile";
+import { resolveTasteChatWithFallback } from "@/lib/agents/taste-profile";
 import { getVerifiedGuestToken } from "@/lib/auth/guest";
 import { getLiveAuthenticatedUser } from "@/lib/auth/rbac";
-import { parseFreeTextProfileFallback } from "@/lib/menu/ingredient-synonyms";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 const tasteChatSchema = z.object({
@@ -13,7 +12,7 @@ const tasteChatSchema = z.object({
   otherDietText: z.string().trim().max(300).optional(),
   otherAllergyText: z.string().trim().max(400).optional(),
   freePreferencesText: z.string().trim().max(600).optional(),
-  allowFallback: z.boolean().default(false),
+  allowFallback: z.boolean().default(true),
 });
 
 export async function POST(req: NextRequest) {
@@ -48,41 +47,26 @@ export async function POST(req: NextRequest) {
   ]);
   const callerKey = liveUser ? `user:${liveUser.id}` : guestToken ? `guest:${guestToken}` : null;
 
-  const result = await runTasteProfileAgent({
+  const resolved = await resolveTasteChatWithFallback({
     message: parsed.data.message,
     locale: parsed.data.locale,
+    otherDietText: parsed.data.otherDietText,
+    otherAllergyText: parsed.data.otherAllergyText,
+    freePreferencesText: parsed.data.freePreferencesText,
+    allowFallback: parsed.data.allowFallback,
     userId: liveUser?.id,
     callerKey,
     clientIp,
   });
 
-  if (!result.ok) {
-    if (result.reason === "AI_NOT_CONFIGURED" && parsed.data.allowFallback) {
-      const fb = parseFreeTextProfileFallback({
-        otherDietText: parsed.data.otherDietText,
-        otherAllergyText: parsed.data.otherAllergyText,
-        freePreferencesText: parsed.data.freePreferencesText || parsed.data.message,
-      });
-      return NextResponse.json({
-        reply:
-          parsed.data.locale === "ar"
-            ? "تم تفسير ملاحظاتك النصية محلياً — راجعها وأكّدها قبل الحفظ."
-            : "Interpreted your notes using deterministic matching — please review & confirm before saving.",
-        patch: {
-          dietaryRestrictions: fb.dietaryRestrictions,
-          allergens: fb.allergens,
-          customAvoidIngredients: fb.customAvoidIngredients,
-          likedIngredients: fb.likedIngredients,
-          dislikedIngredients: fb.dislikedIngredients,
-          favoriteCuisines: [],
-        },
-        usedFallback: true,
-      });
-    }
-
-    const status = httpStatusForAgentError(result.reason);
-    return NextResponse.json({ error: result.message, reason: result.reason }, { status });
+  if (!resolved.ok) {
+    const status = httpStatusForAgentError(resolved.reason);
+    return NextResponse.json({ error: resolved.safeError, reason: resolved.reason }, { status });
   }
 
-  return NextResponse.json(result.data);
+  return NextResponse.json({
+    reply: resolved.reply,
+    patch: resolved.patch,
+    usedFallback: resolved.usedFallback,
+  });
 }

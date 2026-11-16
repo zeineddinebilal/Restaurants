@@ -51,25 +51,27 @@ export function AnalyticsClient({
       });
       const data = (await res.json().catch(() => ({}))) as {
         aggregates?: AnonymousRestaurantAggregateInput;
-        insights?: RestaurantInsightsOutput;
+        insights?: RestaurantInsightsOutput | null;
         aiConfigured?: boolean;
+        aiNotice?: string | null;
         error?: string;
         reason?: string;
       };
 
       if (!res.ok) {
-        if (res.status === 503 || data.reason === "AI_NOT_CONFIGURED") {
-          setAiConfigured(false);
-        } else {
-          setAiNotice(data.error || "Could not refresh AI insights.");
-        }
+        setAiNotice(
+          isAr
+            ? "ملخص الذكاء الاصطناعي غير متاح حالياً — الإحصائيات المجمعة أدناه محدثة."
+            : "AI summary unavailable — deterministic metrics below remain up to date.",
+        );
         setRefreshing(false);
         return;
       }
 
       if (data.aggregates) setAggregates(data.aggregates);
-      if (data.insights) setInsights(data.insights);
-      setAiConfigured(true);
+      setInsights(data.insights ?? null);
+      if (data.aiConfigured !== undefined) setAiConfigured(data.aiConfigured);
+      if (data.aiNotice) setAiNotice(data.aiNotice);
     } catch {
       setAiNotice(isAr ? "خطأ في الاتصال بالشبكة." : "Network error refreshing insights.");
     } finally {

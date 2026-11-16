@@ -1,3 +1,4 @@
+import type { PrismaClient } from "@prisma/client";
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import {
@@ -48,6 +49,62 @@ export function httpStatusForAgentError(reason: AgentFailureReason): number {
 }
 
 /**
+ * Formats a provider error with an explicit class tag (e.g. AUTH_401_403, QUOTA_429, MODEL_404,
+ * TIMEOUT, UPSTREAM_5XX) for admin-only `AiUsageLog.errorMessage` diagnostics while redacting any
+ * accidental credential query parameters. Never expose this string to end-users/diners.
+ */
+export function classifyProviderErrorForLog(err: unknown): string {
+  const errObj = err && typeof err === "object" ? (err as Record<string, unknown>) : null;
+  const rawStatus =
+    typeof errObj?.status === "number"
+      ? errObj.status
+      : typeof errObj?.code === "number"
+        ? errObj.code
+        : undefined;
+  const errName = err instanceof Error ? err.name : "UnknownError";
+  const rawMessage = err instanceof Error ? err.message : String(err ?? "Unknown AI error");
+  const redactedMessage = rawMessage
+    .replace(/([?&]key=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[REDACTED_KEY]");
+
+  const statusMatch =
+    rawStatus ??
+    (() => {
+      const m = /\b(400|401|403|404|429|500|502|503|504)\b/.exec(redactedMessage);
+      return m ? Number.parseInt(m[1]!, 10) : undefined;
+    })();
+
+  let errorClass = "PROVIDER_ERROR";
+  if (
+    statusMatch === 401 ||
+    statusMatch === 403 ||
+    /api[_\s-]?key|unauthenticated|permission_denied|invalid.*key/i.test(redactedMessage)
+  ) {
+    errorClass = "AUTH_401_403";
+  } else if (
+    statusMatch === 429 ||
+    /resource_exhausted|quota|rate[_\s-]?limit|too many requests/i.test(redactedMessage)
+  ) {
+    errorClass = "QUOTA_429";
+  } else if (statusMatch === 404 || /not_found|model.*not found/i.test(redactedMessage)) {
+    errorClass = "MODEL_404";
+  } else if (
+    errName === "AbortError" ||
+    errName === "TimeoutError" ||
+    /timed?\s*out|aborted/i.test(redactedMessage)
+  ) {
+    errorClass = "TIMEOUT";
+  } else if (statusMatch && statusMatch >= 500) {
+    errorClass = `UPSTREAM_${statusMatch}`;
+  } else if (statusMatch === 400) {
+    errorClass = "BAD_REQUEST_400";
+  }
+
+  const statusTag = statusMatch ? ` HTTP ${statusMatch}` : "";
+  return `[${errorClass}${statusTag}] ${errName}: ${redactedMessage}`.slice(0, 500);
+}
+
+/**
  * Shared Gemini runner for all platform AI agents.
  * - Handles missing GEMINI_API_KEY gracefully ("AI not configured")
  * - Reserves a DB-backed `PENDING` row in `AiUsageLog` BEFORE calling Gemini (enforcing global,
@@ -67,6 +124,7 @@ export async function runStructuredAgent<T>(params: {
   restaurantId?: string;
   userId?: string;
   timeoutMs?: number;
+  db?: PrismaClient;
 }): Promise<AgentCallResult<T>> {
   const cfg = getGeminiConfig();
   if (!cfg.configured || !cfg.apiKey) {
@@ -77,14 +135,17 @@ export async function runStructuredAgent<T>(params: {
     };
   }
 
-  const slot = await reserveDailyAiQuotaSlot({
-    agentName: params.agentName,
-    model: cfg.model,
-    callerKey: params.callerKey ?? (params.userId ? `user:${params.userId}` : null),
-    clientIp: params.clientIp ?? null,
-    restaurantId: params.restaurantId ?? null,
-    userId: params.userId ?? null,
-  });
+  const slot = await reserveDailyAiQuotaSlot(
+    {
+      agentName: params.agentName,
+      model: cfg.model,
+      callerKey: params.callerKey ?? (params.userId ? `user:${params.userId}` : null),
+      clientIp: params.clientIp ?? null,
+      restaurantId: params.restaurantId ?? null,
+      userId: params.userId ?? null,
+    },
+    params.db,
+  );
 
   if (!slot.allowed) {
     return {
@@ -118,13 +179,17 @@ export async function runStructuredAgent<T>(params: {
     try {
       parsedJson = JSON.parse(rawText);
     } catch {
-      await finalizeAiQuotaSlot(slot.logId, {
-        success: false,
-        inputTokens,
-        outputTokens,
-        latencyMs,
-        errorMessage: "Model response was not valid JSON",
-      });
+      await finalizeAiQuotaSlot(
+        slot.logId,
+        {
+          success: false,
+          inputTokens,
+          outputTokens,
+          latencyMs,
+          errorMessage: "Model response was not valid JSON",
+        },
+        params.db,
+      );
       return {
         ok: false,
         reason: "SCHEMA_VALIDATION_FAILED",
@@ -134,13 +199,17 @@ export async function runStructuredAgent<T>(params: {
 
     const validated = params.schema.safeParse(parsedJson);
     if (!validated.success) {
-      await finalizeAiQuotaSlot(slot.logId, {
-        success: false,
-        inputTokens,
-        outputTokens,
-        latencyMs,
-        errorMessage: validated.error.message.slice(0, 500),
-      });
+      await finalizeAiQuotaSlot(
+        slot.logId,
+        {
+          success: false,
+          inputTokens,
+          outputTokens,
+          latencyMs,
+          errorMessage: validated.error.message.slice(0, 500),
+        },
+        params.db,
+      );
       return {
         ok: false,
         reason: "SCHEMA_VALIDATION_FAILED",
@@ -148,12 +217,16 @@ export async function runStructuredAgent<T>(params: {
       };
     }
 
-    await finalizeAiQuotaSlot(slot.logId, {
-      success: true,
-      inputTokens,
-      outputTokens,
-      latencyMs,
-    });
+    await finalizeAiQuotaSlot(
+      slot.logId,
+      {
+        success: true,
+        inputTokens,
+        outputTokens,
+        latencyMs,
+      },
+      params.db,
+    );
 
     return {
       ok: true,
@@ -165,14 +238,18 @@ export async function runStructuredAgent<T>(params: {
     };
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
-    const message = err instanceof Error ? err.message : "Unknown AI error";
-    await finalizeAiQuotaSlot(slot.logId, {
-      success: false,
-      inputTokens: 0,
-      outputTokens: 0,
-      latencyMs,
-      errorMessage: message.slice(0, 500),
-    });
+    const classifiedError = classifyProviderErrorForLog(err);
+    await finalizeAiQuotaSlot(
+      slot.logId,
+      {
+        success: false,
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs,
+        errorMessage: classifiedError,
+      },
+      params.db,
+    );
     return {
       ok: false,
       reason: "AI_CALL_FAILED",

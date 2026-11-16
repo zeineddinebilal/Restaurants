@@ -30,7 +30,7 @@ export function MenuAssistantDrawer({
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
-  const [aiNotConfigured, setAiNotConfigured] = useState(false);
+  const [assistantUnavailable, setAssistantUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<AssistantTurn[]>([]);
 
@@ -84,16 +84,11 @@ export function MenuAssistantDrawer({
       };
 
       if (!res.ok) {
-        if (res.status === 503 || data.reason === "AI_NOT_CONFIGURED") {
-          setAiNotConfigured(true);
-        } else {
-          setError(
-            data.error || (isAr ? "تعذر الحصول على إجابة حالياً." : "Unable to answer right now."),
-          );
-        }
+        setAssistantUnavailable(true);
         setLoading(false);
         return;
       }
+      setAssistantUnavailable(false);
 
       setHistory((prev) => [
         ...prev,
@@ -173,11 +168,11 @@ export function MenuAssistantDrawer({
             ))}
           </div>
 
-          {aiNotConfigured && (
+          {assistantUnavailable && (
             <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs font-semibold text-amber-800 dark:text-amber-300">
               {isAr
-                ? "الذكاء الاصطناعي غير مفعل حالياً (AI not configured) — التصفية الحتمية للحساسية وترتيب الميزانية أعلاه يعملان بالكامل."
-                : "AI not configured on this environment — deterministic allergy filtering and budget ranking above remain 100% active."}
+                ? "المساعد غير متاح حالياً، استخدم الفلاتر — تصفية الحساسية والميزانية المخصصة لك أعلاه تعمل بالكامل."
+                : "Assistant unavailable, use the filters — your personalized allergy and budget filters above remain 100% active."}
             </div>
           )}
 

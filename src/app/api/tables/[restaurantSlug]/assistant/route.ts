@@ -178,7 +178,11 @@ export async function POST(
 
   if (!result.ok) {
     const status = httpStatusForAgentError(result.reason);
-    return NextResponse.json({ error: result.message, reason: result.reason }, { status });
+    const safeMessage =
+      parsed.data.locale === "ar"
+        ? "المساعد غير متاح حالياً، استخدم الفلاتر"
+        : "Assistant unavailable, use the filters";
+    return NextResponse.json({ error: safeMessage, reason: result.reason }, { status });
   }
 
   return NextResponse.json(result.data);

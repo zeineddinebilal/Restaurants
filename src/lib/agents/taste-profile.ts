@@ -1,4 +1,4 @@
-import type { SpiceLevel } from "@prisma/client";
+import type { PrismaClient, SpiceLevel } from "@prisma/client";
 import { z } from "zod";
 import { type AgentCallResult, runStructuredAgent } from "@/lib/agents/gemini";
 import { wrapUntrustedText } from "@/lib/agents/guardrails";
@@ -7,6 +7,7 @@ import type { Locale } from "@/lib/i18n/dictionaries";
 import {
   buildCustomAvoidIngredient,
   type CustomAvoidIngredient,
+  parseFreeTextProfileFallback,
 } from "@/lib/menu/ingredient-synonyms";
 import {
   ALL_DINER_DIETS,
@@ -65,6 +66,7 @@ export async function runTasteProfileAgent(params: {
   userId?: string;
   callerKey?: string | null;
   clientIp?: string | null;
+  db?: PrismaClient;
 }): Promise<AgentCallResult<TasteProfileAgentOutput>> {
   const systemInstruction = `You are the Taste Profile Agent for a UAE dining safety & personalization app (currency: AED).
 Interpret the diner's free-text answers into a structured JSON profile patch and a friendly 1-2 sentence confirmation reply in ${params.locale === "ar" ? "Arabic" : "English"}.
@@ -99,6 +101,7 @@ Output JSON matching:
     userId: params.userId,
     callerKey: params.callerKey,
     clientIp: params.clientIp,
+    db: params.db,
   });
 
   if (!rawResult.ok) {
@@ -140,5 +143,87 @@ Output JSON matching:
         preferKeto: rawResult.data.preferKeto ?? normalizedDiets.includes("keto"),
       },
     },
+  };
+}
+
+/**
+ * Executes `runTasteProfileAgent` and, on ANY AI failure (`AI_NOT_CONFIGURED`, `AI_CALL_FAILED`,
+ * `SCHEMA_VALIDATION_FAILED`, `AI_QUOTA_EXCEEDED`), falls back deterministically to
+ * `parseFreeTextProfileFallback` when `allowFallback !== false`.
+ */
+export async function resolveTasteChatWithFallback(params: {
+  message: string;
+  locale: Locale;
+  otherDietText?: string;
+  otherAllergyText?: string;
+  freePreferencesText?: string;
+  allowFallback?: boolean;
+  userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
+  db?: PrismaClient;
+}): Promise<
+  | {
+      ok: true;
+      usedFallback: boolean;
+      reply: string;
+      patch: TasteProfileAgentOutput["patch"];
+    }
+  | {
+      ok: false;
+      reason: Exclude<AgentCallResult<TasteProfileAgentOutput>, { ok: true }>["reason"];
+      safeError: string;
+    }
+> {
+  const result = await runTasteProfileAgent({
+    message: params.message,
+    locale: params.locale,
+    userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
+    db: params.db,
+  });
+
+  if (result.ok) {
+    return {
+      ok: true,
+      usedFallback: false,
+      reply: result.data.reply,
+      patch: result.data.patch,
+    };
+  }
+
+  if (params.allowFallback !== false) {
+    const fb = parseFreeTextProfileFallback({
+      otherDietText: params.otherDietText,
+      otherAllergyText: params.otherAllergyText,
+      freePreferencesText: params.freePreferencesText || params.message,
+    });
+    return {
+      ok: true,
+      usedFallback: true,
+      reply:
+        params.locale === "ar"
+          ? "تمت مطابقة ملاحظاتك تلقائياً بدون الذكاء الاصطناعي — يرجى المراجعة والتأكيد قبل الحفظ."
+          : "Your notes were matched without AI — please review and confirm before saving.",
+      patch: {
+        dietaryRestrictions: fb.dietaryRestrictions,
+        allergens: fb.allergens,
+        customAvoidIngredients: fb.customAvoidIngredients,
+        likedIngredients: fb.likedIngredients,
+        dislikedIngredients: fb.dislikedIngredients,
+        favoriteCuisines: [],
+        ...(fb.maxBudgetAed !== undefined ? { maxBudgetAed: fb.maxBudgetAed } : {}),
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    reason: result.reason,
+    safeError:
+      params.locale === "ar"
+        ? "تعذر تحليل الملاحظات حالياً — يرجى استخدام الخيارات السريعة أدناه."
+        : "Unable to analyze notes right now — please use the quick-pick options below.",
   };
 }

@@ -99,7 +99,21 @@ test("375px mobile layout, Arabic RTL toggle, /for-restaurants demo request, and
   );
   expect(overflowAr).toBe(false);
 
-  // 3. Owner logs in and views printable 14-Allergen Matrix with Chef Karim Mansour & disclaimer
+  // 3. Diner visits /profile, types "no pickles no truffle", and gets deterministic confirmation modal
+  const profileCtx = await browser.newContext();
+  const profilePage = await profileCtx.newPage();
+  await profilePage.goto("/profile");
+  await profilePage
+    .getByPlaceholder(/Tomato allergy, no pork, dislike pickles/i)
+    .fill("no pickles no truffle");
+  await profilePage.getByRole("button", { name: /Interpret & Review/i }).click();
+  const dialog = profilePage.getByRole("dialog", { name: /Confirm interpreted food profile/i });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/matched without AI/i)).toBeVisible();
+  await expect(dialog.getByText(/pickles/i)).toBeVisible();
+  await expect(dialog.getByText(/truffle/i)).toBeVisible();
+
+  // 4. Owner logs in and views printable 14-Allergen Matrix with Chef Karim Mansour & disclaimer
   const ownerCtx = await browser.newContext();
   const ownerPage = await ownerCtx.newPage();
   await ownerPage.goto("/login");
@@ -115,5 +129,6 @@ test("375px mobile layout, Arabic RTL toggle, /for-restaurants demo request, and
   ).toBeVisible();
 
   await mobileCtx.close();
+  await profileCtx.close();
   await ownerCtx.close();
 });

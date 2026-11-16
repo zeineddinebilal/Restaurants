@@ -142,6 +142,23 @@ export const INGREDIENT_SYNONYM_GROUPS: readonly SynonymEntry[] = [
     terms: ["mushroom", "mushrooms", "فطر", "مشروم"],
   },
   {
+    key: "truffle",
+    labelEn: "truffle",
+    labelAr: "كمأة",
+    terms: [
+      "truffle",
+      "truffles",
+      "truffle oil",
+      "black truffle",
+      "white truffle",
+      "كمأة",
+      "ترفل",
+      "فقع",
+      "زيت الكمأة",
+      "زيت ترفل",
+    ],
+  },
+  {
     key: "eggplant",
     labelEn: "eggplant",
     labelAr: "باذنجان",
@@ -315,9 +332,9 @@ export function textContainsIngredientSynonyms(
 }
 
 /**
- * Deterministic fallback interpreter when GEMINI_API_KEY is unset so free-text
- * inputs ("tomato allergy", "that green herb in tabbouleh", "no pork", "pickles")
- * still produce a structured confirmation preview.
+ * Deterministic interpreter used whenever AI is unconfigured, over quota, or unavailable
+ * so free-text inputs ("no pickles no truffle", "without X", "I don't eat X", "tomato allergy",
+ * "that green herb in tabbouleh", "no pork") always produce an accurate structured confirmation preview.
  */
 export function parseFreeTextProfileFallback(params: {
   otherDietText?: string;
@@ -329,25 +346,87 @@ export function parseFreeTextProfileFallback(params: {
   customAvoidIngredients: CustomAvoidIngredient[];
   likedIngredients: string[];
   dislikedIngredients: string[];
+  maxBudgetAed?: string | null;
 } {
   const dietaryRestrictions = new Set<string>();
   const allergens = new Set<string>();
   const customAvoidMap = new Map<string, CustomAvoidIngredient>();
   const liked = new Set<string>();
   const disliked = new Set<string>();
+  let maxBudgetAed: string | null | undefined = undefined;
 
-  const dietRaw = (params.otherDietText ?? "").toLowerCase();
-  if (/\b(no\s+pork|pork[-\s]?free|بدون\s*خنزير)\b/i.test(dietRaw))
-    dietaryRestrictions.add("no_pork");
-  if (/\b(no\s+beef|beef[-\s]?free|بدون\s*بقر)\b/i.test(dietRaw))
-    dietaryRestrictions.add("no_beef");
-  if (/\b(no\s+red\s+meat|بدون\s*لحوم\s*حمراء)\b/i.test(dietRaw))
-    dietaryRestrictions.add("no_red_meat");
-  if (/\b(diabetic|low[-\s]?sugar|سكري|قليل\s*السكر)\b/i.test(dietRaw))
-    dietaryRestrictions.add("low_sugar");
-  if (/\b(keto|low[-\s]?carb|كيتو)\b/i.test(dietRaw)) dietaryRestrictions.add("keto");
-  if (/\b(gluten[-\s]?free|بدون\s*غلوتين)\b/i.test(dietRaw))
-    dietaryRestrictions.add("gluten_free_lifestyle");
+  function applyCanonicalAllergyOrCustomAvoid(rawItem: string) {
+    const cleaned = rawItem
+      .replace(
+        /\b(i\s+have\s+a[n]?\s+|i\s+am\s+|i'm\s+|i\s+react\s+to|severe|strict|allergic\s+to|allergy\s+to|allergy|intolerant\s+to|intolerance\s+to|intolerance|celiac|avoid|no)\b/gi,
+        "",
+      )
+      .replace(/(حساسية\s*شديدة\s*من|حساسية\s*من|حساسية|عدم\s*تحمل)/g, "")
+      .trim();
+    if (!cleaned) return;
+    const low = cleaned.toLowerCase();
+    if (low === "milk" || low === "dairy" || low === "lactose" || low === "حليب" || low === "ألبان")
+      allergens.add("milk");
+    else if (low === "gluten" || low === "wheat" || low === "celiac" || low === "غلوتين")
+      allergens.add("gluten");
+    else if (low === "sesame" || low === "tahini" || low === "سمسم" || low === "طحينة")
+      allergens.add("sesame");
+    else if (low === "peanuts" || low === "peanut" || low === "فول سوداني")
+      allergens.add("peanuts");
+    else if (low === "nuts" || low === "tree nuts" || low === "tree nut" || low === "مكسرات")
+      allergens.add("tree_nuts");
+    else if (low === "egg" || low === "eggs" || low === "بيض") allergens.add("eggs");
+    else if (low === "fish" || low === "سمك") allergens.add("fish");
+    else if (low === "shellfish" || low === "shrimp" || low === "prawns" || low === "crustaceans")
+      allergens.add("crustaceans");
+    else if (low === "soy" || low === "soya" || low === "صويا") allergens.add("soy");
+    else {
+      const built = buildCustomAvoidIngredient(cleaned);
+      customAvoidMap.set(built.key, built);
+    }
+  }
+
+  function extractDietsAndStrip(text: string): string {
+    let working = text;
+    const dietPatterns: ReadonlyArray<{ re: RegExp; tag: string }> = [
+      {
+        re: /\b(?:i\s+don'?t\s+eat\s+pork|do\s+not\s+eat\s+pork|no\s+pork|without\s+pork|pork[-\s]?free)\b|بدون\s*(?:لحم\s*)?خنزير|لا\s*آكل\s*(?:لحم\s*)?خنزير/gi,
+        tag: "no_pork",
+      },
+      {
+        re: /\b(?:i\s+don'?t\s+eat\s+beef|do\s+not\s+eat\s+beef|no\s+beef|without\s+beef|beef[-\s]?free)\b|بدون\s*(?:لحم\s*)?بقر|لا\s*آكل\s*(?:لحم\s*)?بقر/gi,
+        tag: "no_beef",
+      },
+      {
+        re: /\b(?:i\s+don'?t\s+eat\s+red\s+meat|no\s+red\s+meat|without\s+red\s+meat|red\s+meat[-\s]?free)\b|بدون\s*لحوم\s*حمراء/gi,
+        tag: "no_red_meat",
+      },
+      {
+        re: /\b(?:diabetic(?:[-\s]?friendly)?|low[-\s]?sugar)\b|سكري|قليل\s*السكر/gi,
+        tag: "low_sugar",
+      },
+      { re: /\b(?:keto|low[-\s]?carb)\b|كيتو/gi, tag: "keto" },
+      { re: /\b(?:high[-\s]?protein)\b|عالي\s*البروتين/gi, tag: "high_protein" },
+      {
+        re: /\b(?:gluten[-\s]?free(?:\s+diet|\s+lifestyle)?)\b|بدون\s*غلوتين/gi,
+        tag: "gluten_free_lifestyle",
+      },
+      { re: /\bvegan\b|نباتي\s*صرف|فيغن/gi, tag: "vegan" },
+      { re: /\bvegetarian\b|نباتي/gi, tag: "vegetarian" },
+      { re: /\bpescatarian\b/gi, tag: "pescatarian" },
+      { re: /\bhalal\b|حلال/gi, tag: "halal" },
+    ];
+
+    for (const { re, tag } of dietPatterns) {
+      if (re.test(working)) {
+        dietaryRestrictions.add(tag);
+        working = working.replace(re, " , ");
+      }
+    }
+    return working;
+  }
+
+  extractDietsAndStrip(params.otherDietText ?? "");
 
   const allergyChunks = (params.otherAllergyText ?? "")
     .split(/[,،;\n]+|\band\b/i)
@@ -355,51 +434,119 @@ export function parseFreeTextProfileFallback(params: {
     .filter(Boolean);
 
   for (const chunk of allergyChunks) {
-    const cleaned = chunk
-      .replace(
-        /\b(i\s+react\s+to|allergic\s+to|allergy|intolerant\s+to|intolerance|avoid|no|حساسية\s*من|حساسية)\b/gi,
-        "",
-      )
-      .trim();
-    if (!cleaned) continue;
-    const low = cleaned.toLowerCase();
-    if (low === "milk" || low === "dairy" || low === "lactose") allergens.add("milk");
-    else if (low === "gluten" || low === "wheat") allergens.add("gluten");
-    else if (low === "sesame" || low === "tahini") allergens.add("sesame");
-    else if (low === "peanuts" || low === "peanut") allergens.add("peanuts");
-    else if (low === "nuts" || low === "tree nuts") allergens.add("tree_nuts");
-    else {
-      const built = buildCustomAvoidIngredient(cleaned);
-      customAvoidMap.set(built.key, built);
-    }
+    applyCanonicalAllergyOrCustomAvoid(chunk);
   }
 
-  const prefRaw = params.freePreferencesText ?? "";
-  if (/green\s+herb\s+in\s+tabbouleh/i.test(prefRaw)) {
-    if (/\b(don'?t\s+like|hate|dislike|no|without)\b/i.test(prefRaw)) {
+  let prefWorking = params.freePreferencesText ?? "";
+
+  // Strip structural label prefixes added when combining multiple profile fields
+  prefWorking = prefWorking.replace(
+    /\b(?:other\s+diet|hard\s+allergies\/intolerances|likes\s*&\s*dislikes\s+in\s+my\s+own\s+words)\s*:/gi,
+    " , ",
+  );
+
+  // Optional meal budget in free text (e.g. "budget 45 AED" / "under AED 40")
+  const budgetMatch =
+    /\b(?:budget|under|max)\s*(?:aed\s*)?(\d{1,4}(?:\.\d{1,2})?)\s*(?:aed)?\b/i.exec(prefWorking);
+  if (budgetMatch?.[1]) {
+    const num = Number.parseFloat(budgetMatch[1]);
+    if (Number.isFinite(num) && num > 0) {
+      maxBudgetAed = num.toFixed(2);
+    }
+    prefWorking = prefWorking.replace(budgetMatch[0], " , ");
+  }
+
+  // Handle colloquial "green herb in tabbouleh" -> parsley
+  if (/green\s+herb\s+in\s+tabbouleh/i.test(prefWorking)) {
+    if (/\b(don'?t\s+(?:like|eat|want)|hate|dislike|no|without)\b/i.test(prefWorking)) {
       disliked.add("parsley");
     } else {
       liked.add("parsley");
     }
+    prefWorking = prefWorking.replace(/(?:that\s+)?green\s+herb\s+in\s+tabbouleh/gi, " , ");
   }
 
-  const clauses = prefRaw
-    .split(/[,،.;\n]+/)
+  // Extract explicit medical allergy/intolerance statements written directly in chatInput/freePreferencesText
+  const initialClauses = prefWorking.split(/[,،.;\n]+/);
+  const remainingClauses: string[] = [];
+  for (const rawClause of initialClauses) {
+    const c = rawClause.trim();
+    if (!c) continue;
+    if (/\b(allerg(?:y|ic)|intoleran(?:t|ce)|celiac|react\s+to)\b|حساسية|عدم\s*تحمل/i.test(c)) {
+      applyCanonicalAllergyOrCustomAvoid(c);
+    } else if (/\blactose[-\s]?free\b/i.test(c)) {
+      allergens.add("milk");
+    } else {
+      remainingClauses.push(c);
+    }
+  }
+
+  // Extract diet phrases ("no pork", "no beef", "vegetarian", etc.) so they never pollute soft dislikes
+  const afterDietStrip = extractDietsAndStrip(remainingClauses.join(" , "));
+
+  // Split repeated negation/preference openers even without commas (e.g. "no pickles no truffle" -> ["no pickles", "no truffle"])
+  const segments = afterDietStrip
+    .replace(
+      /\s+(?=(?:i\s+(?:really\s+)?(?:don'?t|do\s+not)\s+(?:like|eat|want)|(?:don'?t|do\s+not)\s+(?:like|eat|want)|dislike|hate|without|no|avoid|i\s+(?:really\s+)?(?:love|like))\b)/gi,
+      " | ",
+    )
+    .replace(/\s+(?=(?:لا\s*أحب|لا\s*آكل|ما\s*بحب|بدون|بلا)\s)/g, " | ")
+    .split(/[,،.;|\n]+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  for (const clause of clauses) {
-    if (/green\s+herb\s+in\s+tabbouleh/i.test(clause)) continue;
-    const dislikeMatch =
-      /\b(?:i\s+don'?t\s+like|dislike|hate|no|without|avoid)\s+([a-z\s]{2,30})/i.exec(clause);
-    if (dislikeMatch?.[1]) {
-      const resolved = resolveIngredientSynonyms(dislikeMatch[1].trim());
-      disliked.add(resolved.labelEn);
+
+  function cleanFoodNoun(rawItem: string): string {
+    return rawItem
+      .replace(/^(?:any|some|the|extra|too\s+much)\s+/i, "")
+      .replace(/\s+(?:please|pls|thanks|thank\s+you|at\s+all|on\s+it|in\s+it|either)$/i, "")
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+      .trim();
+  }
+
+  function splitNounList(listStr: string): string[] {
+    return listStr
+      .split(/\b(?:and|or|nor)\b|[&+/]|\s+و(?=\p{Script=Arabic})/iu)
+      .map(cleanFoodNoun)
+      .filter((s) => s.length >= 2 && s.length <= 40);
+  }
+
+  let lastIntent: "dislike" | "like" | null = null;
+
+  for (const seg of segments) {
+    const dislikeOpener =
+      /^(?:i\s+(?:really\s+)?(?:don'?t|do\s+not)\s+(?:like|eat|want)|(?:don'?t|do\s+not)\s+(?:like|eat|want)|dislike|hate|without|no|avoid)\s+(.+)$/i.exec(
+        seg,
+      ) ?? /^(?:لا\s*أحب|لا\s*آكل|ما\s*بحب|بدون|بلا)\s+(.+)$/u.exec(seg);
+
+    if (dislikeOpener?.[1]) {
+      lastIntent = "dislike";
+      for (const item of splitNounList(dislikeOpener[1])) {
+        const resolved = resolveIngredientSynonyms(item);
+        disliked.add(resolved.labelEn);
+      }
       continue;
     }
-    const likeMatch = /\b(?:i\s+love|i\s+like|love|like)\s+([a-z\s]{2,30})/i.exec(clause);
-    if (likeMatch?.[1]) {
-      const resolved = resolveIngredientSynonyms(likeMatch[1].trim());
-      liked.add(resolved.labelEn);
+
+    const likeOpener =
+      /^(?:i\s+(?:really\s+)?(?:love|like|enjoy)|love|like|prefer)\s+(.+)$/i.exec(seg) ??
+      /^(?:أحب|أفضل|بحب)\s+(.+)$/u.exec(seg);
+
+    if (likeOpener?.[1]) {
+      lastIntent = "like";
+      for (const item of splitNounList(likeOpener[1])) {
+        const resolved = resolveIngredientSynonyms(item);
+        liked.add(resolved.labelEn);
+      }
+      continue;
+    }
+
+    // Continuation after comma, e.g. "I don't eat pickles, mushrooms, or truffle" where "mushrooms" / "or truffle" is the next comma segment
+    if (lastIntent) {
+      for (const item of splitNounList(seg)) {
+        const resolved = resolveIngredientSynonyms(item);
+        if (lastIntent === "dislike") disliked.add(resolved.labelEn);
+        else liked.add(resolved.labelEn);
+      }
     }
   }
 
@@ -409,5 +556,6 @@ export function parseFreeTextProfileFallback(params: {
     customAvoidIngredients: Array.from(customAvoidMap.values()),
     likedIngredients: Array.from(liked),
     dislikedIngredients: Array.from(disliked),
+    ...(maxBudgetAed !== undefined ? { maxBudgetAed } : {}),
   };
 }

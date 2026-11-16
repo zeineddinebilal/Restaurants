@@ -281,3 +281,68 @@ Output JSON: { "summary": string, "sharedDishIds": string[], "perPersonPicks": [
     data: finalValue,
   };
 }
+
+/**
+ * Deterministic fallback when Gemini is unconfigured, over quota, or fails:
+ * Picks up to 2 verified shared dishes + 1 top-ranked verified personal dish per diner
+ * (respecting `maxBudgetAed` when set) and computes exact integer-fils bill splits.
+ */
+export function buildDeterministicGroupTableFallback(params: {
+  locale: Locale;
+  dishes: readonly EngineDishInput[];
+  participants: ReadonlyArray<{
+    id: string;
+    name: string;
+    profile: EngineDinerProfile;
+  }>;
+}): GroupTableAgentOutput & { usedFallback: true } {
+  const groupEval = evaluateGroupSharedDishes({
+    dishes: params.dishes,
+    participants: params.participants,
+  });
+
+  const verifiedShared = groupEval.sharedDishes.filter(
+    (s) =>
+      !s.hasUnverifiedWarning &&
+      s.dish.verificationStatus === "RESTAURANT_VERIFIED" &&
+      s.dish.allergenDataProvided,
+  );
+  const allowedSharedById = new Map(verifiedShared.map((s) => [s.dish.id, s]));
+
+  const allowedPersonalByPersonId = new Map<string, Map<string, EvaluatedMenuItem>>();
+  const rawPerPersonPicks: Array<{ participantId: string; dishId: string }> = [];
+
+  for (const p of params.participants) {
+    const pMenu = groupEval.perPersonMenus[p.id];
+    const safeList = pMenu
+      ? [...pMenu.perfectForYou, ...pMenu.goodOptions].filter(
+          (i) =>
+            i.safetyState !== "UNVERIFIED_WARNING" &&
+            i.dish.verificationStatus === "RESTAURANT_VERIFIED" &&
+            i.dish.allergenDataProvided,
+        )
+      : [];
+    allowedPersonalByPersonId.set(p.id, new Map(safeList.map((i) => [i.dish.id, i])));
+    if (safeList[0]) {
+      rawPerPersonPicks.push({ participantId: p.id, dishId: safeList[0].dish.id });
+    }
+  }
+
+  const processed = postProcessGroupTablePlan({
+    summary:
+      params.locale === "ar"
+        ? "تم اختيار هذه التشكيلة تلقائياً من الأطباق الموثقة الآمنة لطاولتكم (بدون الذكاء الاصطناعي)."
+        : "Matched automatically from verified safe dishes for your table (without AI).",
+    rawSharedDishIds: verifiedShared.slice(0, 2).map((s) => s.dish.id),
+    rawPerPersonPicks,
+    allowedSharedById,
+    allowedPersonalByPersonId,
+    participants: params.participants.map((p) => ({ id: p.id, name: p.name })),
+  });
+
+  return {
+    ...processed,
+    cached: false,
+    usedFallback: true,
+  };
+}

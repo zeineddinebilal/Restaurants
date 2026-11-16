@@ -255,15 +255,11 @@ export function GroupTableClient({
     setAiLoading(false);
 
     if (!res.ok) {
-      if (res.status === 503 || data.reason === "AI_NOT_CONFIGURED") {
-        setAiNotice(
-          isAr
-            ? "الذكاء الاصطناعي غير مفعل حالياً — الأطباق المشتركة وتقسيم الفاتورة الحتمي يعملان أدناه بالكامل."
-            : "AI not configured — deterministic shared dishes and bill split below remain 100% active.",
-        );
-      } else {
-        setAiNotice(data.error || "Could not generate group suggestion");
-      }
+      setAiNotice(
+        isAr
+          ? "المساعد غير متاح حالياً — الأطباق المشتركة وتقسيم الفاتورة الحتمي أدناه يعملان بالكامل."
+          : "Assistant unavailable — use the deterministic shared dishes and bill split below.",
+      );
       return;
     }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getGeminiConfig, httpStatusForAgentError } from "@/lib/agents/gemini";
+import { getGeminiConfig } from "@/lib/agents/gemini";
 import {
   buildAnonymousAggregatePayload,
   getCachedRestaurantInsights,
@@ -117,7 +117,9 @@ export async function GET(
     highAllergenDishes,
     aiConfigured: aiResult.ok || aiResult.reason !== "AI_NOT_CONFIGURED",
     insights: aiResult.ok ? aiResult.data : null,
-    aiNotice: aiResult.ok ? null : aiResult.message,
+    aiNotice: aiResult.ok
+      ? null
+      : "AI summary unavailable right now — live scan, allergen, and order metrics below are up to date.",
   });
 }
 
@@ -153,8 +155,14 @@ export async function POST(
   });
 
   if (!aiResult.ok) {
-    const status = httpStatusForAgentError(aiResult.reason);
-    return NextResponse.json({ error: aiResult.message, reason: aiResult.reason }, { status });
+    return NextResponse.json({
+      aggregates,
+      highAllergenDishes,
+      aiConfigured: aiResult.reason !== "AI_NOT_CONFIGURED",
+      insights: null,
+      aiNotice:
+        "AI summary unavailable right now — live scan, allergen, and order metrics below are up to date.",
+    });
   }
 
   return NextResponse.json({
