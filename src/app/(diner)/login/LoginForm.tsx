@@ -38,7 +38,7 @@ export function LoginForm({
       return;
     }
 
-    router.push("/");
+    // Refresh /login so the server redirect routes each role directly to its portal
     router.refresh();
   }
 

@@ -7,6 +7,7 @@ import {
   Eye,
   Flame,
   Plus,
+  Send,
   ShieldAlert,
   ShoppingBag,
   SlidersHorizontal,
@@ -17,7 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SerializedDinerProfile } from "@/lib/diner/profile";
 import {
   type EngineDinerProfile,
@@ -39,8 +40,11 @@ interface DraftCartEntry {
   nameEn: string;
   nameAr: string;
   unitPriceFils: number;
+  modifierIds: string[];
   modifierNamesEn: string[];
   modifierNamesAr: string[];
+  personaOwner: PersonaKey;
+  participantName: string;
   quantity: number;
 }
 
@@ -172,14 +176,70 @@ export function PersonalizedMenuClient({
   const [showFullMenu, setShowFullMenu] = useState(false);
   const [showQuickGuestEditor, setShowQuickGuestEditor] = useState(!initialProfile);
 
-  // Guest / quick-profile state
   const [guestDiets, setGuestDiets] = useState<string[]>(initialProfile?.dietaryRestrictions ?? []);
   const [guestAllergens, setGuestAllergens] = useState<string[]>(initialProfile?.allergens ?? []);
   const [guestBudget, setGuestBudget] = useState<string>(initialProfile?.maxBudgetAed ?? "");
   const [savingGuest, setSavingGuest] = useState(false);
 
-  // Per-meal cart state so remaining meal budget updates live on add/remove
   const [cart, setCart] = useState<DraftCartEntry[]>([]);
+  const [participantIdsByName, setParticipantIdsByName] = useState<Record<string, string>>({});
+  const [selfParticipantId, setSelfParticipantId] = useState<string | null>(null);
+  const [sendingOrder, setSendingOrder] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
+
+  // Join open TableSession on mount (and load demo friends if in demo mode so persona picks map cleanly)
+  useEffect(() => {
+    let cancelled = false;
+    async function initTableSession() {
+      const res = await fetch(
+        `/api/tables/${restaurant.slug}/t-placeholder`.replace(
+          "/t-placeholder",
+          `/${table.tableCode}/session`,
+        ),
+      );
+      if (!res.ok || cancelled) return;
+      const data = (await res.json()) as {
+        selfParticipantId?: string;
+        canLoadDemoFriends?: boolean;
+        participants?: Array<{ id: string; displayName: string }>;
+      };
+
+      if (data.selfParticipantId) {
+        setSelfParticipantId(data.selfParticipantId);
+      }
+
+      if (data.canLoadDemoFriends) {
+        await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/session`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "join_demo_friends" }),
+        });
+        const refreshed = await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/session`);
+        if (refreshed.ok && !cancelled) {
+          const rData = (await refreshed.json()) as {
+            participants?: Array<{ id: string; displayName: string }>;
+          };
+          const map: Record<string, string> = {};
+          for (const p of rData.participants ?? []) {
+            map[p.displayName.toLowerCase()] = p.id;
+          }
+          setParticipantIdsByName(map);
+          return;
+        }
+      }
+
+      const map: Record<string, string> = {};
+      for (const p of data.participants ?? []) {
+        map[p.displayName.toLowerCase()] = p.id;
+      }
+      if (!cancelled) setParticipantIdsByName(map);
+    }
+
+    void initTableSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [restaurant.slug, table.tableCode]);
 
   const activeProfile: EngineDinerProfile = useMemo(() => {
     if (persona === "claude" || persona === "bilal" || persona === "james") {
@@ -199,7 +259,16 @@ export function PersonalizedMenuClient({
     };
   }, [persona, initialProfile, guestDiets, guestAllergens, guestBudget, isAr]);
 
-  const cartTotalFils = useMemo(
+  // Per-persona cart total for accurate per-person meal budget evaluation!
+  const activePersonaCartTotalFils = useMemo(
+    () =>
+      cart
+        .filter((item) => item.personaOwner === persona)
+        .reduce((sum, item) => sum + item.unitPriceFils * item.quantity, 0),
+    [cart, persona],
+  );
+
+  const combinedCartTotalFils = useMemo(
     () => cart.reduce((sum, item) => sum + item.unitPriceFils * item.quantity, 0),
     [cart],
   );
@@ -209,25 +278,48 @@ export function PersonalizedMenuClient({
       evaluatePersonalizedMenu({
         dishes,
         profile: activeProfile,
-        currentCartTotalFils: cartTotalFils,
+        currentCartTotalFils: activePersonaCartTotalFils,
       }),
-    [dishes, activeProfile, cartTotalFils],
+    [dishes, activeProfile, activePersonaCartTotalFils],
   );
 
   const groupEvaluated = useMemo(() => {
     if (persona !== "group") return null;
+    const jamesCartFils = cart
+      .filter((c) => c.personaOwner === "james")
+      .reduce((s, c) => s + c.unitPriceFils * c.quantity, 0);
     return evaluateGroupSharedDishes({
       dishes,
       participants: [
         { id: "claude", name: "Claude", profile: DEMO_PERSONAS.claude },
         { id: "bilal", name: "Bilal", profile: DEMO_PERSONAS.bilal },
-        { id: "james", name: "James", profile: DEMO_PERSONAS.james, cartTotalFils },
+        { id: "james", name: "James", profile: DEMO_PERSONAS.james, cartTotalFils: jamesCartFils },
       ],
     });
-  }, [persona, dishes, cartTotalFils]);
+  }, [persona, dishes, cart]);
 
-  function addEvaluatedToCart(item: EvaluatedMenuItem) {
-    const key = `${item.dish.id}:${item.preselectedModifierIds.join(",")}`;
+  function addDishToCart(params: {
+    dishId: string;
+    nameEn: string;
+    nameAr: string;
+    unitPriceFils: number;
+    modifierIds: string[];
+    modifierNamesEn: string[];
+    modifierNamesAr: string[];
+    ownerPersona: PersonaKey;
+  }) {
+    const participantName =
+      params.ownerPersona === "claude"
+        ? "Claude"
+        : params.ownerPersona === "bilal"
+          ? "Bilal"
+          : params.ownerPersona === "james"
+            ? "James"
+            : params.ownerPersona === "group"
+              ? "Shared Table"
+              : initialProfile?.displayName || "Guest Diner";
+
+    const key = `${params.ownerPersona}:${params.dishId}:${params.modifierIds.join(",")}`;
     setCart((prev) => {
       const existingIdx = prev.findIndex((c) => c.key === key);
       if (existingIdx >= 0) {
@@ -242,12 +334,15 @@ export function PersonalizedMenuClient({
         ...prev,
         {
           key,
-          dishId: item.dish.id,
-          nameEn: item.dish.nameEn,
-          nameAr: item.dish.nameAr,
-          unitPriceFils: item.effectivePriceFils,
-          modifierNamesEn: item.preselectedModifiers.map((m) => m.nameEn),
-          modifierNamesAr: item.preselectedModifiers.map((m) => m.nameAr),
+          dishId: params.dishId,
+          nameEn: params.nameEn,
+          nameAr: params.nameAr,
+          unitPriceFils: params.unitPriceFils,
+          modifierIds: params.modifierIds,
+          modifierNamesEn: params.modifierNamesEn,
+          modifierNamesAr: params.modifierNamesAr,
+          personaOwner: params.ownerPersona,
+          participantName,
           quantity: 1,
         },
       ];
@@ -256,6 +351,53 @@ export function PersonalizedMenuClient({
 
   function removeCartKey(key: string) {
     setCart((prev) => prev.filter((c) => c.key !== key));
+  }
+
+  async function handleSendOrderToKitchen() {
+    if (cart.length === 0) return;
+    setSendingOrder(true);
+    setOrderError(null);
+
+    const lines = cart.map((c) => {
+      let participantId: string | null = null;
+      if (c.personaOwner === "self") {
+        participantId = selfParticipantId;
+      } else if (
+        c.personaOwner === "claude" ||
+        c.personaOwner === "bilal" ||
+        c.personaOwner === "james"
+      ) {
+        participantId = participantIdsByName[c.personaOwner] ?? null;
+      }
+
+      return {
+        menuItemId: c.dishId,
+        modifierIds: c.modifierIds,
+        quantity: c.quantity,
+        participantId,
+        participantName: c.participantName,
+      };
+    });
+
+    const res = await fetch(`/api/tables/${restaurant.slug}/${table.tableCode}/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lines }),
+    });
+    setSendingOrder(false);
+
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      order?: { id: string };
+    };
+
+    if (!res.ok || !data.order?.id) {
+      setOrderError(data.error || "Could not send order");
+      return;
+    }
+
+    setCart([]);
+    router.push(`/orders/${data.order.id}`);
   }
 
   async function handleSaveQuickGuestProfile() {
@@ -325,7 +467,7 @@ export function PersonalizedMenuClient({
           </p>
         </div>
 
-        <div className="mt-4 flex items-center justify-between gap-2 pt-2 border-t border-[var(--border-subtle)]">
+        <div className="mt-4 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2">
           <Link
             href={dishHref}
             className="text-xs font-semibold text-[var(--text-secondary)] underline hover:text-[var(--text-primary)]"
@@ -335,7 +477,19 @@ export function PersonalizedMenuClient({
 
           <button
             type="button"
-            onClick={() => addEvaluatedToCart(item)}
+            onClick={() =>
+              addDishToCart({
+                dishId: item.dish.id,
+                nameEn: item.dish.nameEn,
+                nameAr: item.dish.nameAr,
+                unitPriceFils: item.effectivePriceFils,
+                modifierIds: item.preselectedModifierIds,
+                modifierNamesEn: item.preselectedModifiers.map((m) => m.nameEn),
+                modifierNamesAr: item.preselectedModifiers.map((m) => m.nameAr),
+                ownerPersona: persona,
+              })
+            }
+            aria-label={`Add ${item.dish.nameEn}`}
             className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[var(--accent-hover)]"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -346,7 +500,6 @@ export function PersonalizedMenuClient({
     );
   }
 
-  // Group categories for "Full Original Menu" toggle
   const fullMenuCategories = useMemo(() => {
     const map = new Map<string, { name: string; items: EngineDishInput[] }>();
     for (const d of dishes) {
@@ -360,7 +513,7 @@ export function PersonalizedMenuClient({
   }, [dishes, locale]);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 pb-28 sm:px-6">
+    <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 pb-36 sm:px-6">
       {/* Restaurant & Table Header */}
       <header className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-sm sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -377,6 +530,14 @@ export function PersonalizedMenuClient({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={`/r/${restaurant.slug}/t/${table.tableCode}/group`}
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[var(--accent-soft)] px-3.5 py-2 text-xs font-bold text-[var(--accent-primary)]"
+            >
+              <Users className="h-3.5 w-3.5" />
+              <span>{isAr ? "طاولة المجموعة وتقسيم الفاتورة" : "Table Group & Split"}</span>
+            </Link>
+
             <button
               type="button"
               onClick={() => setShowQuickGuestEditor((v) => !v)}
@@ -409,7 +570,7 @@ export function PersonalizedMenuClient({
           </div>
         </div>
 
-        {/* Mandatory Allergy Safety Disclaimer on Every Personalized Menu */}
+        {/* Mandatory Allergy Safety Disclaimer */}
         <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[var(--accent-soft)] px-4 py-2.5 text-xs font-bold text-[var(--accent-primary)]">
           <ShieldAlert className="h-4 w-4 shrink-0" />
           <span>{safetyDisclaimer}</span>
@@ -459,7 +620,7 @@ export function PersonalizedMenuClient({
 
       {/* Guest Mode Inline Quick Profile Builder */}
       {showQuickGuestEditor && persona === "self" && (
-        <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-sm space-y-4">
+        <section className="space-y-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold">
               {isAr
@@ -521,7 +682,7 @@ export function PersonalizedMenuClient({
               value={guestBudget}
               onChange={(e) => setGuestBudget(e.target.value)}
               placeholder="Meal budget AED (e.g. 40.00)"
-              className="w-52 min-h-9 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-1.5 font-mono text-xs"
+              className="min-h-9 w-52 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-1.5 font-mono text-xs"
             />
             <button
               type="button"
@@ -535,7 +696,7 @@ export function PersonalizedMenuClient({
         </section>
       )}
 
-      {/* Meal Budget Running Meter when diner has maxBudgetAed */}
+      {/* Meal Budget Running Meter */}
       {persona !== "group" && evaluated.maxBudgetFils !== null && (
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-5 py-3.5">
           <div className="flex items-center gap-2 text-sm font-semibold">
@@ -556,6 +717,15 @@ export function PersonalizedMenuClient({
             </span>
           </div>
         </section>
+      )}
+
+      {orderError && (
+        <div
+          role="alert"
+          className="rounded-2xl bg-[var(--accent-soft)] px-4 py-3 text-sm font-semibold text-[var(--accent-primary)]"
+        >
+          {orderError}
+        </div>
       )}
 
       {/* View A: Full Unfiltered Menu Toggle */}
@@ -611,33 +781,57 @@ export function PersonalizedMenuClient({
               {groupEvaluated.sharedDishes.map((shared) => (
                 <article
                   key={shared.dish.id}
-                  className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 shadow-xs"
+                  className="flex flex-col justify-between rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 shadow-xs"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <Link
-                      href={`/r/${restaurant.slug}/dish/${shared.dish.id}?table=${encodeURIComponent(table.tableCode)}`}
-                      className="font-bold hover:text-[var(--accent-primary)]"
-                    >
-                      {pickLocalized(shared.dish.nameEn, shared.dish.nameAr, locale)}
-                    </Link>
-                    <span className="font-mono text-sm font-extrabold">
-                      {formatAed(shared.effectivePriceFils, locale)}
-                    </span>
-                  </div>
-                  {shared.hasUnverifiedWarning && (
-                    <div className="mt-1.5">{renderBadge("UNVERIFIED_WARNING", locale)}</div>
-                  )}
-                  {shared.requiredModifiers.length > 0 && (
-                    <p className="mt-2 rounded-xl bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
-                      ✓ Shared modifier:{" "}
-                      {shared.requiredModifiers
-                        .map((m) => pickLocalized(m.nameEn, m.nameAr, locale))
-                        .join(", ")}
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <Link
+                        href={`/r/${restaurant.slug}/dish/${shared.dish.id}?table=${encodeURIComponent(table.tableCode)}`}
+                        className="font-bold hover:text-[var(--accent-primary)]"
+                      >
+                        {pickLocalized(shared.dish.nameEn, shared.dish.nameAr, locale)}
+                      </Link>
+                      <span className="font-mono text-sm font-extrabold">
+                        {formatAed(shared.effectivePriceFils, locale)}
+                      </span>
+                    </div>
+                    {shared.hasUnverifiedWarning && (
+                      <div className="mt-1.5">{renderBadge("UNVERIFIED_WARNING", locale)}</div>
+                    )}
+                    {shared.requiredModifiers.length > 0 && (
+                      <p className="mt-2 rounded-xl bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                        ✓ Shared modifier:{" "}
+                        {shared.requiredModifiers
+                          .map((m) => pickLocalized(m.nameEn, m.nameAr, locale))
+                          .join(", ")}
+                      </p>
+                    )}
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">
+                      {pickLocalized(shared.dish.descriptionEn, shared.dish.descriptionAr, locale)}
                     </p>
-                  )}
-                  <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                    {pickLocalized(shared.dish.descriptionEn, shared.dish.descriptionAr, locale)}
-                  </p>
+                  </div>
+
+                  <div className="mt-3 flex justify-end border-t border-[var(--border-subtle)] pt-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        addDishToCart({
+                          dishId: shared.dish.id,
+                          nameEn: shared.dish.nameEn,
+                          nameAr: shared.dish.nameAr,
+                          unitPriceFils: shared.effectivePriceFils,
+                          modifierIds: shared.requiredModifiers.map((m) => m.id),
+                          modifierNamesEn: shared.requiredModifiers.map((m) => m.nameEn),
+                          modifierNamesAr: shared.requiredModifiers.map((m) => m.nameAr),
+                          ownerPersona: "group",
+                        })
+                      }
+                      className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-bold text-white"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>{isAr ? "إضافة للمشاركة" : "Add Shared"}</span>
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -646,7 +840,6 @@ export function PersonalizedMenuClient({
       ) : (
         /* View C: Personalized Diner Menu */
         <div className="space-y-8">
-          {/* 1. Perfect For You */}
           {evaluated.perfectForYou.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-xl font-extrabold">{isAr ? "مثالي لك" : "Perfect for you"}</h2>
@@ -656,7 +849,6 @@ export function PersonalizedMenuClient({
             </section>
           )}
 
-          {/* 2. Good Options */}
           {evaluated.goodOptions.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-xl font-extrabold">{isAr ? "خيارات جيدة" : "Good options"}</h2>
@@ -666,7 +858,6 @@ export function PersonalizedMenuClient({
             </section>
           )}
 
-          {/* 3. More Options (Over Remaining Meal Budget — Collapsed) */}
           {evaluated.moreOptions.length > 0 && (
             <details className="group rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5">
               <summary className="flex cursor-pointer list-none items-center justify-between font-bold">
@@ -683,7 +874,6 @@ export function PersonalizedMenuClient({
             </details>
           )}
 
-          {/* 4. Hidden (n) — Tap to See Why */}
           {evaluated.hidden.length > 0 && (
             <details className="group rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-muted)] p-5">
               <summary className="flex cursor-pointer list-none items-center justify-between font-bold text-[var(--text-secondary)]">
@@ -714,23 +904,18 @@ export function PersonalizedMenuClient({
         </div>
       )}
 
-      {/* Floating Cart Bar (shows running total vs meal budget; sends live orders in Phase 5) */}
+      {/* Floating Combined Table Order Bar */}
       {cart.length > 0 && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 p-4 shadow-lg backdrop-blur-md">
-          <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <ShoppingBag className="h-5 w-5 text-[var(--accent-primary)]" />
+          <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <ShoppingBag className="mt-0.5 h-5 w-5 text-[var(--accent-primary)]" />
               <div>
                 <p className="text-sm font-extrabold">
                   {cart.reduce((s, c) => s + c.quantity, 0)} {isAr ? "أصناف" : "item(s)"} •{" "}
-                  <span className="font-mono">{formatAed(cartTotalFils, locale)}</span>
-                  {evaluated.maxBudgetFils !== null && (
-                    <span className="ms-2 font-mono text-xs text-[var(--text-secondary)]">
-                      / {formatAed(evaluated.maxBudgetFils, locale)}
-                    </span>
-                  )}
+                  <span className="font-mono">{formatAed(combinedCartTotalFils, locale)}</span>
                 </p>
-                <div className="flex flex-wrap gap-2 text-[11px] text-[var(--text-secondary)]">
+                <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-[var(--text-secondary)]">
                   {cart.map((c) => (
                     <button
                       key={c.key}
@@ -739,7 +924,8 @@ export function PersonalizedMenuClient({
                       className="inline-flex items-center gap-1 rounded bg-[var(--bg-muted)] px-2 py-0.5 hover:text-red-600"
                     >
                       <span>
-                        {c.quantity}× {pickLocalized(c.nameEn, c.nameAr, locale)}
+                        [{c.participantName}] {c.quantity}×{" "}
+                        {pickLocalized(c.nameEn, c.nameAr, locale)}
                       </span>
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -747,6 +933,24 @@ export function PersonalizedMenuClient({
                 </div>
               </div>
             </div>
+
+            <button
+              type="button"
+              disabled={sendingOrder}
+              onClick={handleSendOrderToKitchen}
+              className="inline-flex min-h-11 items-center gap-2 rounded-2xl bg-[var(--accent-primary)] px-6 py-2.5 text-sm font-extrabold text-white shadow-sm hover:bg-[var(--accent-hover)] disabled:opacity-60"
+            >
+              <Send className="h-4 w-4" />
+              <span>
+                {sendingOrder
+                  ? isAr
+                    ? "جاري الإرسال..."
+                    : "Sending..."
+                  : isAr
+                    ? "إرسال الطلب للمطبخ"
+                    : "Send Order to Kitchen"}
+              </span>
+            </button>
           </div>
         </div>
       )}

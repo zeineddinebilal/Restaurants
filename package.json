@@ -7,8 +7,8 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"prisma/**/*.ts\" && prisma format",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"prisma/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"prisma/**/*.ts\" \"e2e/**/*.ts\" && prisma format",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"prisma/**/*.ts\" \"e2e/**/*.ts\"",
     "test": "prisma generate && tsx --test \"src/**/__tests__/**/*.test.ts\"",
     "test:watch": "tsx --test --watch \"src/**/__tests__/**/*.test.ts\"",
     "test:e2e": "playwright test",
@@ -34,6 +34,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@electric-sql/pglite-socket": "^0.2.19",
     "@eslint/eslintrc": "^3.3.1",
     "@playwright/test": "^1.52.0",
     "@tailwindcss/postcss": "^4.1.0",
