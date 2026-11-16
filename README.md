@@ -69,4 +69,4 @@ Restaurants pay **`min(AED 1.00, 10% × order subtotal)`** (round half up) only 
      - Monitored via `/api/health` (verifies both app liveness and PostgreSQL connectivity).
      - Uses an in-memory per-instance sliding-window rate limiter (appropriate for a single Render web service instance; client IP extraction prefers Render's `true-client-ip`, falling back to the last entry of `x-forwarded-for`).
      - Dish photo uploads require S3 env vars (`S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) in production; local `public/uploads` fallback is restricted strictly to `NODE_ENV=development` because Render's container filesystem is ephemeral.
-4. Set secret environment variables prompted by Render (`GEMINI_API_KEY`; optionally `DEMO_MODE`, `SEED_DEMO`, `DEMO_PASSWORD`, and S3 credentials).
+4. Set `sync: false` environment variables prompted by Render (`GEMINI_API_KEY`; for demo deployments set `DEMO_MODE="true"`, `SEED_DEMO="true"`, and `DEMO_PASSWORD`, or `"false"` for production; optionally add S3 credentials). Using `sync: false` ensures values configured in the Render Dashboard are preserved across Blueprint syncs.

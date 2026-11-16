@@ -47,9 +47,9 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: DEMO_MODE
-        value: "false"
+        sync: false
       - key: SEED_DEMO
-        value: "false"
+        sync: false
       - key: DEMO_PASSWORD
         sync: false
       - key: TABLE_SESSION_TTL_HOURS
