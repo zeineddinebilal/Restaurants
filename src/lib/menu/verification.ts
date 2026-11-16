@@ -1,11 +1,19 @@
 import type { MeatType, VerificationStatus } from "@prisma/client";
 import { normalizeAllergenList, normalizeDietTagList } from "@/lib/menu/taxonomy";
 
+export interface ModifierVerificationCandidate {
+  nameEn: string;
+  nameAr?: string;
+  removesAllergens: readonly string[];
+  addsDietTags: readonly string[];
+}
+
 export interface DishVerificationCandidate {
   allergenDataProvided: boolean;
   allergens: readonly string[];
   dietTags: readonly string[];
   meatType: MeatType;
+  modifiers?: readonly ModifierVerificationCandidate[];
 }
 
 export type DishVerificationValidation =
@@ -13,14 +21,87 @@ export type DishVerificationValidation =
   | { ok: false; code: string; message: string };
 
 /**
- * Validates whether a dish is eligible to be marked `RESTAURANT_VERIFIED`.
- *
- * Safety-first rules:
- * 1. `allergenDataProvided` MUST be `true` (missing allergen data can never be verified safe).
- * 2. Diet/meat/allergen contradictions are rejected:
- *    - `vegetarian` or `vegan` cannot have `meatType !== "NONE"` or `fish`/`crustaceans`/`molluscs`/`shellfish` allergens.
- *    - `vegan` cannot contain `milk` or `eggs` allergens.
- *    - `pescatarian` cannot have `CHICKEN`, `BEEF`, `LAMB`, or `OTHER` meat types.
+ * Validates a modifier against its parent dish before allowing verification:
+ * - `addsDietTags` containing "vegetarian" or "vegan" is invalid if base `meatType !== "NONE"`
+ *   (modifiers do not remove base meatType) or if remaining allergens still contain fish/shellfish.
+ * - `addsDietTags` containing "vegan" requires that any `milk` or `eggs` on the base dish
+ *   are included in `modifier.removesAllergens`.
+ * - `addsDietTags` containing "pescatarian" is invalid if base `meatType` is land meat.
+ */
+export function validateModifierForVerification(
+  dish: {
+    allergens: readonly string[];
+    dietTags: readonly string[];
+    meatType: MeatType;
+  },
+  modifier: ModifierVerificationCandidate,
+):
+  | { ok: true; normalizedRemovesAllergens: string[]; normalizedAddsDietTags: string[] }
+  | { ok: false; code: string; message: string } {
+  const baseAllergens = normalizeAllergenList(dish.allergens);
+  const removesAllergens = normalizeAllergenList(modifier.removesAllergens);
+  const addsDietTags = normalizeDietTagList(modifier.addsDietTags);
+
+  const removedSet = new Set(removesAllergens);
+  const remainingAllergens = new Set(baseAllergens.filter((a) => !removedSet.has(a)));
+  const addedDietSet = new Set(addsDietTags);
+  const combinedDietSet = new Set([...normalizeDietTagList(dish.dietTags), ...addsDietTags]);
+
+  if (addedDietSet.has("vegetarian") || addedDietSet.has("vegan")) {
+    if (dish.meatType !== "NONE") {
+      return {
+        ok: false,
+        code: "MODIFIER_MEAT_CONFLICT",
+        message: `Modifier "${modifier.nameEn}" cannot add vegetarian/vegan to a dish with meatType "${dish.meatType}".`,
+      };
+    }
+    if (
+      remainingAllergens.has("fish") ||
+      remainingAllergens.has("crustaceans") ||
+      remainingAllergens.has("molluscs") ||
+      remainingAllergens.has("shellfish")
+    ) {
+      return {
+        ok: false,
+        code: "MODIFIER_SEAFOOD_CONFLICT",
+        message: `Modifier "${modifier.nameEn}" cannot add vegetarian/vegan while fish/shellfish allergens remain.`,
+      };
+    }
+  }
+
+  if (addedDietSet.has("vegan") || (combinedDietSet.has("vegan") && addedDietSet.size > 0)) {
+    if (remainingAllergens.has("milk") || remainingAllergens.has("eggs")) {
+      return {
+        ok: false,
+        code: "MODIFIER_VEGAN_DAIRY_EGG_CONFLICT",
+        message: `Modifier "${modifier.nameEn}" adds vegan, so it must remove all milk and egg allergens present in the base dish.`,
+      };
+    }
+  }
+
+  if (
+    addedDietSet.has("pescatarian") &&
+    dish.meatType !== "NONE" &&
+    dish.meatType !== "FISH" &&
+    dish.meatType !== "SHELLFISH"
+  ) {
+    return {
+      ok: false,
+      code: "MODIFIER_PESCATARIAN_MEAT_CONFLICT",
+      message: `Modifier "${modifier.nameEn}" cannot add pescatarian to land meatType "${dish.meatType}".`,
+    };
+  }
+
+  return {
+    ok: true,
+    normalizedRemovesAllergens: removesAllergens,
+    normalizedAddsDietTags: addsDietTags,
+  };
+}
+
+/**
+ * Validates whether a dish (and all of its modifiers, if provided) is eligible
+ * to be marked `RESTAURANT_VERIFIED`.
  */
 export function validateDishForVerification(
   candidate: DishVerificationCandidate,
@@ -30,7 +111,7 @@ export function validateDishForVerification(
       ok: false,
       code: "MISSING_ALLERGEN_DATA",
       message:
-        "Cannot mark dish as restaurant-verified until allergen information is explicitly confirmed (allergenDataProvided = true).",
+        "Cannot mark dish as restaurant-verified until allergen information is explicitly confirmed by the restaurant.",
     };
   }
 
@@ -82,6 +163,20 @@ export function validateDishForVerification(
     };
   }
 
+  for (const mod of candidate.modifiers ?? []) {
+    const modCheck = validateModifierForVerification(
+      {
+        allergens,
+        dietTags,
+        meatType: candidate.meatType,
+      },
+      mod,
+    );
+    if (!modCheck.ok) {
+      return modCheck;
+    }
+  }
+
   return {
     ok: true,
     normalizedAllergens: allergens,
@@ -96,14 +191,52 @@ function sameSortedStrings(a: readonly string[], b: readonly string[]): boolean 
   return sa.every((val, i) => val === sb[i]);
 }
 
+function canonicalizeModifiers(mods: readonly ModifierVerificationCandidate[]): string[] {
+  return mods
+    .map((m) => {
+      const rem = normalizeAllergenList(m.removesAllergens).sort().join(",");
+      const add = normalizeDietTagList(m.addsDietTags).sort().join(",");
+      return `${m.nameEn.trim()}|${(m.nameAr ?? "").trim()}|${rem}|${add}`;
+    })
+    .sort();
+}
+
+/**
+ * Evaluates a batch-imported item where `verifyNow` may have been requested.
+ * If validation fails, safely falls back to `AI_SUGGESTED` and returns a warning
+ * rather than allowing invalid safety claims to be saved as verified.
+ */
+export function evaluateBatchImportVerification(
+  candidate: DishVerificationCandidate & { nameEn: string; verifyNow: boolean },
+): {
+  verified: boolean;
+  warning?: { nameEn: string; code: string; message: string };
+} {
+  if (!candidate.verifyNow) {
+    return { verified: false };
+  }
+
+  const check = validateDishForVerification(candidate);
+  if (!check.ok) {
+    return {
+      verified: false,
+      warning: {
+        nameEn: candidate.nameEn,
+        code: check.code,
+        message: check.message,
+      },
+    };
+  }
+
+  return { verified: true };
+}
+
 /**
  * Determines the resulting `verificationStatus` when a restaurant edits an existing dish.
  *
- * - New AI-extracted/tagged items ALWAYS start at `AI_SUGGESTED`.
- * - If safety-critical fields (`allergens`, `dietTags`, `meatType`, `ingredientsEn`,
- *   `ingredientsAr`, or `allergenDataProvided`) change on a `RESTAURANT_VERIFIED` dish
- *   WITHOUT `reverify: true`, its status automatically downgrades to `AI_SUGGESTED`
- *   so modified dishes are never shown as verified-safe until re-confirmed.
+ * - Any change to dish safety fields OR modifiers (`removesAllergens`, `addsDietTags`,
+ *   modifier names, or adding/removing modifiers) downgrades BOTH the dish and its
+ *   modifiers to `AI_SUGGESTED` unless `reverify: true` is passed and passes validation.
  */
 export function resolveUpdatedVerificationStatus(params: {
   previous: {
@@ -114,6 +247,7 @@ export function resolveUpdatedVerificationStatus(params: {
     meatType: MeatType;
     ingredientsEn: readonly string[];
     ingredientsAr: readonly string[];
+    modifiers?: readonly ModifierVerificationCandidate[];
   };
   next: {
     allergenDataProvided: boolean;
@@ -122,6 +256,7 @@ export function resolveUpdatedVerificationStatus(params: {
     meatType: MeatType;
     ingredientsEn: readonly string[];
     ingredientsAr: readonly string[];
+    modifiers?: readonly ModifierVerificationCandidate[];
   };
   reverify?: boolean;
 }):
@@ -132,14 +267,17 @@ export function resolveUpdatedVerificationStatus(params: {
     }
   | { ok: false; code: string; message: string } {
   if (params.reverify) {
-    const validation = validateDishForVerification(params.next);
+    const validation = validateDishForVerification({
+      ...params.next,
+      modifiers: params.next.modifiers ?? params.previous.modifiers,
+    });
     if (!validation.ok) {
       return validation;
     }
     return {
       ok: true,
       verificationStatus: "RESTAURANT_VERIFIED",
-      keepVerifiedMetadata: false, // caller stamps fresh verifiedAt + verifiedById
+      keepVerifiedMetadata: false,
     };
   }
 
@@ -159,7 +297,16 @@ export function resolveUpdatedVerificationStatus(params: {
     };
   }
 
+  const modifiersUnchanged =
+    params.next.modifiers === undefined
+      ? true
+      : sameSortedStrings(
+          canonicalizeModifiers(params.previous.modifiers ?? []),
+          canonicalizeModifiers(params.next.modifiers),
+        );
+
   const safetyFieldsUnchanged =
+    modifiersUnchanged &&
     params.previous.allergenDataProvided === params.next.allergenDataProvided &&
     params.previous.meatType === params.next.meatType &&
     sameSortedStrings(

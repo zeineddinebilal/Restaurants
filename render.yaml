@@ -2,27 +2,30 @@
 # Repository: https://github.com/zeineddinebilal/Restaurants
 #
 # Notes on Render behavior:
-# 1. Database plan defaults to `basic-256mb` (Render's paid starter Postgres tier)
-#    because Render's `free` Postgres tier expires and is deleted after 30 days.
-#    For short-term free testing, change `plan: basic-256mb` under `databases` to `plan: free`.
-# 2. Migrations run inside `startCommand` (`npx prisma migrate deploy && npm run start`)
-#    rather than `preDeployCommand`, because `preDeployCommand` is only supported on paid
-#    web service plans. Putting `prisma migrate deploy` in `startCommand` ensures migrations
-#    always run safely before server startup on both free and paid web plans.
+# 1. Both web and database default to `plan: free` for the live demo deployment.
+#    - Free web services spin down after ~15 minutes of inactivity (~1 minute cold start);
+#      open the site ~1 minute before a restaurant pitch so it is warm.
+#      Upgrade path for zero cold starts: `plan: starter` under `services`.
+#    - Free Render PostgreSQL databases expire after 30 days.
+#      Upgrade path for persistent production data: `plan: basic-256mb` under `databases`.
+# 2. Free web services do not provide a Render Shell, so `startCommand` runs both
+#    `npx prisma migrate deploy` and the idempotent `npm run db:seed` script automatically
+#    before `npm run start`. When `SEED_DEMO=true` (and `DEMO_PASSWORD` is set), demo users
+#    and the 42-dish demo menu are upserted safely on startup without duplicating rows.
 
 databases:
   - name: platefit-db
     databaseName: platefit
     user: platefit_user
-    plan: basic-256mb # Switch to `free` for 30-day evaluation only (free DBs expire after 30 days)
+    plan: free # Upgrade to `basic-256mb` for paid persistent DB (free DB expires after 30 days)
 
 services:
   - type: web
     name: platefit-web
     runtime: node
-    plan: starter # Switch to `free` for hobby evaluation (spins down when idle)
+    plan: free # Upgrade to `starter` for always-on paid web service (no 15-min idle sleep)
     buildCommand: npm ci --include=dev && npm run build
-    startCommand: npx prisma migrate deploy && npm run start
+    startCommand: npx prisma migrate deploy && npm run db:seed && npm run start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

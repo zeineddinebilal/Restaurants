@@ -7,7 +7,10 @@ import {
   normalizeDietTagList,
   SPICE_LEVELS,
 } from "@/lib/menu/taxonomy";
-import { validateDishForVerification } from "@/lib/menu/verification";
+import {
+  evaluateBatchImportVerification,
+  validateDishForVerification,
+} from "@/lib/menu/verification";
 import { aedToFils, filsToAedString } from "@/lib/money";
 import { requireRestaurantOwnerApi } from "@/lib/restaurant/access";
 
@@ -29,13 +32,13 @@ function exactAedField(allowNegative = false) {
     .transform((val) => filsToAedString(aedToFils(val)));
 }
 
+// Client-sent modifier verification status is never accepted; modifiers only verify with parent dish
 const modifierInputSchema = z.object({
   nameEn: z.string().trim().min(1).max(160),
   nameAr: z.string().trim().min(1).max(160),
   priceDeltaAed: exactAedField(true).default("0.00"),
   removesAllergens: z.array(z.string()).default([]),
   addsDietTags: z.array(z.string()).default([]),
-  verified: z.boolean().optional().default(false),
 });
 
 const singleItemInputSchema = z.object({
@@ -75,10 +78,16 @@ const batchImportSchema = z.object({
     .min(1),
 });
 
-const bulkActionSchema = z.object({
-  action: z.enum(["bulk_verify", "bulk_publish", "bulk_unpublish"]),
-  itemIds: z.array(z.string().min(1)).optional(),
-});
+const bulkActionSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("bulk_verify"),
+    itemIds: z.array(z.string().min(1)).min(1, "Select at least one dish to bulk verify."),
+  }),
+  z.object({
+    action: z.enum(["bulk_publish", "bulk_unpublish"]),
+    itemIds: z.array(z.string().min(1)).optional(),
+  }),
+]);
 
 export async function GET(
   _req: NextRequest,
@@ -129,28 +138,10 @@ export async function POST(
       );
     }
 
-    // Pre-validate any item marked `verifyNow: true`
-    for (const cat of parsedBatch.data.categories) {
-      for (const item of cat.items) {
-        if (item.verifyNow) {
-          const check = validateDishForVerification({
-            allergenDataProvided: item.allergenDataProvided,
-            allergens: item.allergens,
-            dietTags: item.dietTags,
-            meatType: item.meatType,
-          });
-          if (!check.ok) {
-            return NextResponse.json(
-              { error: `${item.nameEn}: ${check.message}`, code: check.code },
-              { status: 400 },
-            );
-          }
-        }
-      }
-    }
-
     const now = new Date();
     const existingCount = await prisma.menuCategory.count({ where: { restaurantId } });
+    const validationWarnings: Array<{ nameEn: string; code: string; message: string }> = [];
+    let verifiedCount = 0;
 
     const importedCount = await prisma.$transaction(async (tx) => {
       let createdDishes = 0;
@@ -169,7 +160,22 @@ export async function POST(
         for (const item of cat.items) {
           const normalizedAllergens = normalizeAllergenList(item.allergens);
           const normalizedDietTags = normalizeDietTagList(item.dietTags);
-          const verified = item.verifyNow && item.allergenDataProvided;
+          const check = evaluateBatchImportVerification({
+            nameEn: item.nameEn,
+            verifyNow: item.verifyNow,
+            allergenDataProvided: item.allergenDataProvided,
+            allergens: normalizedAllergens,
+            dietTags: normalizedDietTags,
+            meatType: item.meatType,
+            modifiers: item.modifiers,
+          });
+
+          if (check.warning) {
+            validationWarnings.push(check.warning);
+          }
+          if (check.verified) {
+            verifiedCount++;
+          }
 
           await tx.menuItem.create({
             data: {
@@ -189,9 +195,9 @@ export async function POST(
               spiceLevel: item.spiceLevel,
               meatType: item.meatType,
               aiConfidence: item.aiConfidence || null,
-              verificationStatus: verified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
-              verifiedAt: verified ? now : null,
-              verifiedById: verified ? access.user.id : null,
+              verificationStatus: check.verified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
+              verifiedAt: check.verified ? now : null,
+              verifiedById: check.verified ? access.user.id : null,
               isAvailable: true,
               isPopular: item.isPopular,
               isPublished: parsedBatch.data.publishImmediately || item.isPublished,
@@ -203,8 +209,7 @@ export async function POST(
                       priceDeltaAed: mod.priceDeltaAed,
                       removesAllergens: normalizeAllergenList(mod.removesAllergens),
                       addsDietTags: normalizeDietTagList(mod.addsDietTags),
-                      verificationStatus:
-                        verified || mod.verified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
+                      verificationStatus: check.verified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
                     })),
                   }
                 : undefined,
@@ -217,7 +222,7 @@ export async function POST(
       return createdDishes;
     });
 
-    return NextResponse.json({ importedCount }, { status: 201 });
+    return NextResponse.json({ importedCount, verifiedCount, validationWarnings }, { status: 201 });
   }
 
   // Mode B: Single dish creation
@@ -245,6 +250,7 @@ export async function POST(
       allergens: normalizedAllergens,
       dietTags: normalizedDietTags,
       meatType: parsed.data.meatType,
+      modifiers: parsed.data.modifiers,
     });
     if (!check.ok) {
       return NextResponse.json({ error: check.message, code: check.code }, { status: 400 });
@@ -286,8 +292,7 @@ export async function POST(
               priceDeltaAed: mod.priceDeltaAed,
               removesAllergens: normalizeAllergenList(mod.removesAllergens),
               addsDietTags: normalizeDietTagList(mod.addsDietTags),
-              verificationStatus:
-                isVerified || mod.verified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
+              verificationStatus: isVerified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
             })),
           }
         : undefined,
@@ -315,14 +320,16 @@ export async function PATCH(
 
   const parsed = bulkActionSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid bulk action" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Validation failed", details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
   }
 
-  const whereClause = parsed.data.itemIds?.length
-    ? { restaurantId, id: { in: parsed.data.itemIds } }
-    : { restaurantId };
-
   if (parsed.data.action === "bulk_publish" || parsed.data.action === "bulk_unpublish") {
+    const whereClause = parsed.data.itemIds?.length
+      ? { restaurantId, id: { in: parsed.data.itemIds } }
+      : { restaurantId };
     const isPublished = parsed.data.action === "bulk_publish";
     const updated = await prisma.menuItem.updateMany({
       where: whereClause,
@@ -331,9 +338,9 @@ export async function PATCH(
     return NextResponse.json({ updatedCount: updated.count });
   }
 
-  // bulk_verify: strictly checks `validateDishForVerification` per item so invalid/missing-data items are skipped safely
+  // bulk_verify requires an explicit non-empty itemIds list and validates dish + modifiers
   const candidates = await prisma.menuItem.findMany({
-    where: whereClause,
+    where: { restaurantId, id: { in: parsed.data.itemIds } },
     include: { modifiers: true },
   });
 
@@ -348,6 +355,7 @@ export async function PATCH(
         allergens: item.allergens,
         dietTags: item.dietTags,
         meatType: item.meatType,
+        modifiers: item.modifiers,
       });
 
       if (!check.ok) {

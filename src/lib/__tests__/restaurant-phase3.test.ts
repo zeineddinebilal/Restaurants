@@ -5,13 +5,15 @@ import { normalizeAiPriceToAed, runMenuIngestionAgent } from "@/lib/agents/menu-
 import { DEMO_LEBANESE_CATEGORIES } from "@/lib/demo/lebanese-menu-data";
 import { normalizeAllergenList, normalizeDietTagList } from "@/lib/menu/taxonomy";
 import {
+  evaluateBatchImportVerification,
   resolveUpdatedVerificationStatus,
   validateDishForVerification,
+  validateModifierForVerification,
 } from "@/lib/menu/verification";
 import { aedToFils } from "@/lib/money";
 import { buildTableQrPath, buildTableQrUrl, generateQrCodeSvg } from "@/lib/qr";
 
-describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 42-Dish Demo Seed", () => {
+describe("Phase 3 Restaurant Side — Verification Rules, Modifiers, AI Agents, QR & 42-Dish Seed", () => {
   it("rejects verifying dishes when allergenDataProvided is false (missing data = never safe)", () => {
     const res = validateDishForVerification({
       allergenDataProvided: false,
@@ -36,7 +38,6 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
   });
 
   it("blocks contradictory diet/meat/allergen combinations from being verified", () => {
-    // Vegetarian with CHICKEN meatType -> rejected
     const vegMeat = validateDishForVerification({
       allergenDataProvided: true,
       allergens: [],
@@ -45,7 +46,6 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
     });
     assert.equal(vegMeat.ok, false);
 
-    // Vegan with milk allergen -> rejected
     const veganDairy = validateDishForVerification({
       allergenDataProvided: true,
       allergens: ["dairy"],
@@ -54,7 +54,6 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
     });
     assert.equal(veganDairy.ok, false);
 
-    // Pescatarian with LAMB -> rejected; with FISH -> accepted
     const pescLamb = validateDishForVerification({
       allergenDataProvided: true,
       allergens: [],
@@ -72,17 +71,91 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
     assert.equal(pescFish.ok, true);
   });
 
-  it("downgrades RESTAURANT_VERIFIED back to AI_SUGGESTED when safety fields change without reverify", () => {
+  it("validates modifiers against parent dish meatType and remaining milk/egg allergens", () => {
+    // 1. Invalid: modifier claims to add vegetarian/vegan to a LAMB dish
+    const meatMod = validateModifierForVerification(
+      { allergens: ["milk"], dietTags: ["halal"], meatType: "LAMB" },
+      {
+        nameEn: "Without yogurt",
+        removesAllergens: ["milk"],
+        addsDietTags: ["vegetarian"],
+      },
+    );
+    assert.equal(meatMod.ok, false);
+    if (!meatMod.ok) {
+      assert.equal(meatMod.code, "MODIFIER_MEAT_CONFLICT");
+    }
+
+    // 2. Invalid: modifier claims to add vegan, removes milk, but base dish still has eggs
+    const veganLeavesEggs = validateModifierForVerification(
+      { allergens: ["milk", "eggs"], dietTags: ["vegetarian"], meatType: "NONE" },
+      {
+        nameEn: "Without cheese",
+        removesAllergens: ["milk"],
+        addsDietTags: ["vegan"],
+      },
+    );
+    assert.equal(veganLeavesEggs.ok, false);
+    if (!veganLeavesEggs.ok) {
+      assert.equal(veganLeavesEggs.code, "MODIFIER_VEGAN_DAIRY_EGG_CONFLICT");
+    }
+
+    // 3. Valid: vegetarian dish with milk, modifier removes milk and adds vegan
+    const validVeganMod = validateModifierForVerification(
+      { allergens: ["sesame", "milk"], dietTags: ["vegetarian", "halal"], meatType: "NONE" },
+      {
+        nameEn: "Without yogurt swirl",
+        removesAllergens: ["milk"],
+        addsDietTags: ["vegan"],
+      },
+    );
+    assert.equal(validVeganMod.ok, true);
+  });
+
+  it("batch import falls back to AI_SUGGESTED with warnings when verifyNow fails safety checks", () => {
+    const invalidBatchItem = evaluateBatchImportVerification({
+      nameEn: "Invalid Vegetarian Lamb",
+      verifyNow: true,
+      allergenDataProvided: true,
+      allergens: [],
+      dietTags: ["vegetarian"],
+      meatType: "LAMB",
+    });
+    assert.equal(invalidBatchItem.verified, false);
+    assert.ok(invalidBatchItem.warning);
+    assert.equal(invalidBatchItem.warning.code, "DIET_MEAT_CONFLICT");
+
+    const unconfirmedBatchItem = evaluateBatchImportVerification({
+      nameEn: "Unconfirmed AI Dish",
+      verifyNow: true,
+      allergenDataProvided: false,
+      allergens: ["sesame"],
+      dietTags: ["vegan"],
+      meatType: "NONE",
+    });
+    assert.equal(unconfirmedBatchItem.verified, false);
+    assert.equal(unconfirmedBatchItem.warning?.code, "MISSING_ALLERGEN_DATA");
+  });
+
+  it("downgrades RESTAURANT_VERIFIED back to AI_SUGGESTED when safety fields OR modifiers change without reverify", () => {
     const baseSafety = {
       allergenDataProvided: true,
-      allergens: ["sesame"],
-      dietTags: ["vegetarian", "vegan", "halal"],
+      allergens: ["sesame", "milk"],
+      dietTags: ["vegetarian", "halal"],
       meatType: "NONE" as const,
-      ingredientsEn: ["chickpeas", "tahini"],
-      ingredientsAr: ["حمص", "طحينة"],
+      ingredientsEn: ["eggplant", "tahini", "yogurt"],
+      ingredientsAr: ["باذنجان", "طحينة", "لبن"],
+      modifiers: [
+        {
+          nameEn: "Without yogurt",
+          nameAr: "بدون لبن",
+          removesAllergens: ["milk"],
+          addsDietTags: ["vegan"],
+        },
+      ],
     };
 
-    // Unchanged safety fields (e.g. only price updated) -> stays RESTAURANT_VERIFIED
+    // Unchanged safety fields & modifiers -> stays RESTAURANT_VERIFIED
     const unchanged = resolveUpdatedVerificationStatus({
       previous: { verificationStatus: "RESTAURANT_VERIFIED", ...baseSafety },
       next: { ...baseSafety },
@@ -93,10 +166,31 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
       keepVerifiedMetadata: true,
     });
 
-    // Ingredient or allergen edited without reverify -> resets to AI_SUGGESTED
+    // Editing modifier removesAllergens without reverify -> downgrades to AI_SUGGESTED
+    const editedModifiers = resolveUpdatedVerificationStatus({
+      previous: { verificationStatus: "RESTAURANT_VERIFIED", ...baseSafety },
+      next: {
+        ...baseSafety,
+        modifiers: [
+          {
+            nameEn: "Without yogurt",
+            nameAr: "بدون لبن",
+            removesAllergens: [],
+            addsDietTags: [],
+          },
+        ],
+      },
+    });
+    assert.deepEqual(editedModifiers, {
+      ok: true,
+      verificationStatus: "AI_SUGGESTED",
+      keepVerifiedMetadata: false,
+    });
+
+    // Editing ingredients without reverify -> downgrades to AI_SUGGESTED
     const editedIngredients = resolveUpdatedVerificationStatus({
       previous: { verificationStatus: "RESTAURANT_VERIFIED", ...baseSafety },
-      next: { ...baseSafety, ingredientsEn: ["chickpeas", "tahini", "yogurt"] },
+      next: { ...baseSafety, ingredientsEn: ["eggplant", "tahini", "yogurt", "walnuts"] },
     });
     assert.deepEqual(editedIngredients, {
       ok: true,
@@ -104,22 +198,23 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
       keepVerifiedMetadata: false,
     });
 
-    // Explicit reverify stamps fresh RESTAURANT_VERIFIED after validation
-    const reverified = resolveUpdatedVerificationStatus({
+    // Explicit reverify validates both dish & modifiers before granting RESTAURANT_VERIFIED
+    const invalidReverify = resolveUpdatedVerificationStatus({
       previous: { verificationStatus: "RESTAURANT_VERIFIED", ...baseSafety },
       next: {
         ...baseSafety,
-        allergens: ["sesame", "milk"],
-        dietTags: ["vegetarian", "halal"],
-        ingredientsEn: ["chickpeas", "tahini", "yogurt"],
+        modifiers: [
+          {
+            nameEn: "Broken vegan modifier",
+            nameAr: "تعديل خاطئ",
+            removesAllergens: [], // leaves milk in base dish while claiming vegan!
+            addsDietTags: ["vegan"],
+          },
+        ],
       },
       reverify: true,
     });
-    assert.deepEqual(reverified, {
-      ok: true,
-      verificationStatus: "RESTAURANT_VERIFIED",
-      keepVerifiedMetadata: false,
-    });
+    assert.equal(invalidReverify.ok, false);
   });
 
   it("normalizes allergen aliases, diet tags, and AI decimal prices without floats", () => {
@@ -168,7 +263,7 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
     assert.ok(svg.includes("<svg"));
   });
 
-  it("validates all ~40 dishes in DEMO_LEBANESE_CATEGORIES for bilingual, price, and safety consistency", () => {
+  it("validates all 42 dishes & modifiers in DEMO_LEBANESE_CATEGORIES for safety consistency", () => {
     const allDishes = DEMO_LEBANESE_CATEGORIES.flatMap((c) => c.items);
     assert.ok(allDishes.length >= 40, `Expected >= 40 demo dishes, found ${allDishes.length}`);
 
@@ -188,6 +283,7 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
           allergens: dish.allergens,
           dietTags: dish.dietTags,
           meatType: dish.meatType,
+          modifiers: dish.modifiers,
         });
         assert.equal(
           check.ok,
@@ -196,10 +292,14 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
         );
       } else {
         aiSuggestedCount++;
+        assert.equal(
+          dish.allergenDataProvided,
+          false,
+          `AI_SUGGESTED seed dish "${dish.nameEn}" must have allergenDataProvided = false`,
+        );
       }
 
       for (const mod of dish.modifiers ?? []) {
-        // Verify modifier priceDeltaAed parses cleanly (supports negative or zero deltas too)
         assert.equal(typeof aedToFils(mod.priceDeltaAed), "number");
         if (mod.removesAllergens.includes("milk")) {
           dairyFreeModifierCount++;
@@ -208,7 +308,7 @@ describe("Phase 3 Restaurant Side — Verification Rules, AI Agents, QR Codes & 
     }
 
     assert.ok(verifiedCount >= 35);
-    assert.ok(aiSuggestedCount >= 2);
+    assert.ok(aiSuggestedCount >= 3);
     assert.ok(dairyFreeModifierCount >= 4);
   });
 });

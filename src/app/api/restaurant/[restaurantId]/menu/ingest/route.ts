@@ -165,7 +165,7 @@ export async function POST(
         ingredientsAr: item.ingredientsAr,
         dietTags: tag?.dietTags ?? [],
         allergens: tag?.allergens ?? [],
-        allergenDataProvided: Boolean(tag),
+        allergenDataProvided: false,
         spiceLevel: tag?.spiceLevel ?? "NONE",
         meatType: tag?.meatType ?? "NONE",
         aiConfidence: tag?.aiConfidence ?? null,

@@ -123,6 +123,12 @@ export function MenuBuilderClient({
   const [newCatEn, setNewCatEn] = useState("");
   const [newCatAr, setNewCatAr] = useState("");
 
+  // Explicit selection state required for bulk_verify (empty selection is never allowed)
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [confirmingVerifyItems, setConfirmingVerifyItems] = useState<SerializedMenuItem[] | null>(
+    null,
+  );
+
   const [editingItem, setEditingItem] = useState<{
     isNew: boolean;
     id?: string;
@@ -148,6 +154,8 @@ export function MenuBuilderClient({
 
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const allItemsFlat = categories.flatMap((c) => c.items);
 
   async function handleRunAiIngestion(e: React.FormEvent) {
     e.preventDefault();
@@ -182,12 +190,14 @@ export function MenuBuilderClient({
       return;
     }
 
+    // AI outputs ALWAYS default to allergenDataProvided: false and verifyNow: false
     setReviewCategories(
       payload.categories.map((cat) => ({
         nameEn: cat.nameEn,
         nameAr: cat.nameAr,
         items: cat.items.map((it) => ({
           ...it,
+          allergenDataProvided: false,
           verifyNow: false,
         })),
       })),
@@ -210,7 +220,12 @@ export function MenuBuilderClient({
     });
     setBusy(false);
 
-    const data = (await res.json().catch(() => ({}))) as { error?: string; importedCount?: number };
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      importedCount?: number;
+      verifiedCount?: number;
+      validationWarnings?: Array<{ nameEn: string; message: string }>;
+    };
     if (!res.ok) {
       setBanner({ type: "err", text: data.error || "Failed to save extracted menu" });
       return;
@@ -219,11 +234,15 @@ export function MenuBuilderClient({
     setReviewCategories(null);
     setPastedText("");
     setSelectedFiles([]);
+
+    const warningNote =
+      data.validationWarnings && data.validationWarnings.length > 0
+        ? ` (${data.validationWarnings.length} dish(es) imported as AI_SUGGESTED because safety checks failed: ${data.validationWarnings.map((w) => w.nameEn).join(", ")})`
+        : "";
+
     setBanner({
       type: "ok",
-      text: isAr
-        ? `تم استيراد ${data.importedCount} طبقاً بنجاح!`
-        : `Imported ${data.importedCount} dishes into your menu!`,
+      text: `Imported ${data.importedCount ?? 0} dishes (${data.verifiedCount ?? 0} verified)${warningNote}.`,
     });
     router.refresh();
   }
@@ -267,68 +286,88 @@ export function MenuBuilderClient({
     router.refresh();
   }
 
-  async function handleBulkAction(action: "bulk_verify" | "bulk_publish" | "bulk_unpublish") {
-    setBusy(true);
-    setBanner(null);
-    const res = await fetch(`/api/restaurant/${restaurantId}/menu/items`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action }),
-    });
-    setBusy(false);
-    const data = (await res.json().catch(() => ({}))) as {
-      error?: string;
-      verifiedCount?: number;
-      updatedCount?: number;
-      skipped?: Array<{ nameEn: string; reason: string }>;
-    };
-
-    if (!res.ok) {
-      setBanner({ type: "err", text: data.error || "Bulk action failed" });
+  function openBulkVerifyDialog() {
+    const picked = allItemsFlat.filter((i) => selectedItemIds.includes(i.id));
+    if (picked.length === 0) {
+      setBanner({
+        type: "err",
+        text: isAr
+          ? "يرجى تحديد طبق واحد على الأقل لمراجعة مسببات الحساسية وتوثيقه."
+          : "Select at least one dish using the row checkboxes before bulk verifying.",
+      });
       return;
     }
+    setConfirmingVerifyItems(picked);
+  }
 
-    if (action === "bulk_verify") {
-      const skippedMsg =
-        data.skipped && data.skipped.length > 0
-          ? ` (${data.skipped.length} skipped — confirm allergen data or resolve diet conflicts first)`
-          : "";
+  async function handleConfirmVerifyModal() {
+    if (!confirmingVerifyItems || confirmingVerifyItems.length === 0) return;
+    setBusy(true);
+    setBanner(null);
+
+    // Owner has explicitly reviewed every dish & its allergens in this modal:
+    // mark allergenDataProvided = true + reverify = true on each reviewed item
+    let verifiedCount = 0;
+    const errors: string[] = [];
+
+    for (const item of confirmingVerifyItems) {
+      const res = await fetch(`/api/restaurant/${restaurantId}/menu/items/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          allergenDataProvided: true,
+          reverify: true,
+        }),
+      });
+      if (res.ok) {
+        verifiedCount++;
+      } else {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        errors.push(`${item.nameEn}: ${data.error || "Failed"}`);
+      }
+    }
+
+    setBusy(false);
+    setConfirmingVerifyItems(null);
+    setSelectedItemIds([]);
+
+    if (errors.length > 0) {
       setBanner({
-        type: "ok",
-        text: `Verified ${data.verifiedCount ?? 0} dishes${skippedMsg}.`,
+        type: "err",
+        text: `Verified ${verifiedCount}. Skipped: ${errors.join(" | ")}`,
       });
     } else {
       setBanner({
         type: "ok",
-        text: `Updated ${data.updatedCount ?? 0} dishes.`,
+        text: `Restaurant-verified ${verifiedCount} dish(es).`,
       });
     }
     router.refresh();
   }
 
-  async function handleQuickVerify(item: SerializedMenuItem) {
+  async function handleBulkPublishToggle(action: "bulk_publish" | "bulk_unpublish") {
     setBusy(true);
     setBanner(null);
-    const res = await fetch(`/api/restaurant/${restaurantId}/menu/items/${item.id}`, {
+    const res = await fetch(`/api/restaurant/${restaurantId}/menu/items`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        allergenDataProvided: true,
-        reverify: true,
+        action,
+        itemIds: selectedItemIds.length > 0 ? selectedItemIds : undefined,
       }),
     });
     setBusy(false);
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      updatedCount?: number;
+    };
+
     if (!res.ok) {
-      setBanner({ type: "err", text: `${item.nameEn}: ${data.error || "Verification failed"}` });
+      setBanner({ type: "err", text: data.error || "Publish update failed" });
       return;
     }
-    setBanner({
-      type: "ok",
-      text: isAr
-        ? `تم توثيق "${item.nameAr}" كآمن من قِبل المطعم.`
-        : `"${item.nameEn}" is now Restaurant Verified.`,
-    });
+
+    setBanner({ type: "ok", text: `Updated ${data.updatedCount ?? 0} dishes.` });
     router.refresh();
   }
 
@@ -355,7 +394,8 @@ export function MenuBuilderClient({
       ingredientsArText: "",
       dietTags: ["halal"],
       allergens: [],
-      allergenDataProvided: true,
+      // Must default to false until the human explicitly ticks the confirmation checkbox
+      allergenDataProvided: false,
       spiceLevel: "NONE",
       meatType: "NONE",
       isPopular: false,
@@ -437,7 +477,8 @@ export function MenuBuilderClient({
       allergens: suggestion.allergens,
       spiceLevel: suggestion.spiceLevel,
       meatType: suggestion.meatType,
-      allergenDataProvided: true,
+      // AI suggestions NEVER count as human-confirmed allergen data
+      allergenDataProvided: false,
       modifiers:
         suggestion.suggestedModifiers.length > 0
           ? suggestion.suggestedModifiers
@@ -467,6 +508,14 @@ export function MenuBuilderClient({
 
   async function handleSaveEditingItem(verifyAndSave: boolean) {
     if (!editingItem) return;
+    if (verifyAndSave && !editingItem.allergenDataProvided) {
+      setBanner({
+        type: "err",
+        text: "Tick the allergen confirmation checkbox in the form before verifying this dish.",
+      });
+      return;
+    }
+
     setBusy(true);
     setBanner(null);
 
@@ -491,13 +540,19 @@ export function MenuBuilderClient({
       ingredientsAr,
       dietTags: editingItem.dietTags,
       allergens: editingItem.allergens,
-      allergenDataProvided: verifyAndSave ? true : editingItem.allergenDataProvided,
+      allergenDataProvided: editingItem.allergenDataProvided,
       spiceLevel: editingItem.spiceLevel,
       meatType: editingItem.meatType,
       isPopular: editingItem.isPopular,
       isPublished: editingItem.isPublished,
       imageUrl: editingItem.imageUrl || null,
-      modifiers: editingItem.modifiers,
+      modifiers: editingItem.modifiers.map((m) => ({
+        nameEn: m.nameEn,
+        nameAr: m.nameAr,
+        priceDeltaAed: m.priceDeltaAed,
+        removesAllergens: m.removesAllergens,
+        addsDietTags: m.addsDietTags,
+      })),
       ...(editingItem.isNew ? { verifyNow: verifyAndSave } : { reverify: verifyAndSave }),
     };
 
@@ -540,25 +595,29 @@ export function MenuBuilderClient({
           </h1>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">
             {isAr
-              ? "ارفع قائمة مطعمك بالذكاء الاصطناعي، راجع الأطباق، وثّق مسببات الحساسية، وانشر القائمة بأمان."
-              : "Upload menu photos/PDF or text for AI extraction, verify allergen safety tags, and publish."}
+              ? "ارفع قائمة مطعمك بالذكاء الاصطناعي، راجع الأطباق، أكّد مسببات الحساسية يدوياً، وانشر القائمة بأمان."
+              : "Upload menu photos/PDF or text for AI extraction, explicitly confirm allergen tags, and publish."}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={busy}
-            onClick={() => handleBulkAction("bulk_verify")}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+            disabled={busy || selectedItemIds.length === 0}
+            onClick={openBulkVerifyDialog}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
           >
             <CheckCircle2 className="h-4 w-4" />
-            <span>{isAr ? "توثيق الكل المؤهل" : "Bulk Verify Confirmed"}</span>
+            <span>
+              {isAr
+                ? `مراجعة وتوثيق المحدد (${selectedItemIds.length})`
+                : `Review & Verify Selected (${selectedItemIds.length})`}
+            </span>
           </button>
           <button
             type="button"
             disabled={busy}
-            onClick={() => handleBulkAction("bulk_publish")}
+            onClick={() => handleBulkPublishToggle("bulk_publish")}
             className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2 text-xs font-semibold"
           >
             <Eye className="h-4 w-4" />
@@ -567,7 +626,7 @@ export function MenuBuilderClient({
           <button
             type="button"
             disabled={busy}
-            onClick={() => handleBulkAction("bulk_unpublish")}
+            onClick={() => handleBulkPublishToggle("bulk_unpublish")}
             className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2 text-xs font-semibold"
           >
             <EyeOff className="h-4 w-4" />
@@ -683,8 +742,9 @@ export function MenuBuilderClient({
                     : "Editable AI Extraction Review Table"}
                 </h3>
                 <p className="text-xs text-[var(--text-secondary)]">
-                  All AI tags start as AI_SUGGESTED. Check &ldquo;Verify&rdquo; on rows you have
-                  inspected to save them as RESTAURANT_VERIFIED.
+                  All AI tags start unconfirmed (`allergenDataProvided = false`, `AI_SUGGESTED`).
+                  Only tick &ldquo;Confirm &amp; Verify&rdquo; on rows whose allergens you have
+                  personally checked.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -743,7 +803,7 @@ export function MenuBuilderClient({
                         <th className="py-2 pe-2 text-start">AED</th>
                         <th className="py-2 pe-2 text-start">Allergens</th>
                         <th className="py-2 pe-2 text-start">Diet Tags</th>
-                        <th className="py-2 pe-2 text-start">Verify</th>
+                        <th className="py-2 pe-2 text-start">Confirm &amp; Verify</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--border-subtle)]">
@@ -798,10 +858,10 @@ export function MenuBuilderClient({
                                   onClick={() => {
                                     const next = [...reviewCategories];
                                     const items = [...next[cIdx]!.items];
+                                    // Editing allergen chips does NOT auto-set allergenDataProvided
                                     items[iIdx] = {
                                       ...it,
                                       allergens: toggleArrayValue(it.allergens, alg),
-                                      allergenDataProvided: true,
                                     };
                                     next[cIdx] = { ...cat, items };
                                     setReviewCategories(next);
@@ -849,17 +909,18 @@ export function MenuBuilderClient({
                               type="checkbox"
                               checked={it.verifyNow}
                               onChange={(e) => {
+                                const checked = e.target.checked;
                                 const next = [...reviewCategories];
                                 const items = [...next[cIdx]!.items];
                                 items[iIdx] = {
                                   ...it,
-                                  allergenDataProvided: true,
-                                  verifyNow: e.target.checked,
+                                  allergenDataProvided: checked,
+                                  verifyNow: checked,
                                 };
                                 next[cIdx] = { ...cat, items };
                                 setReviewCategories(next);
                               }}
-                              aria-label={`Verify ${it.nameEn}`}
+                              aria-label={`Confirm allergens and verify ${it.nameEn}`}
                             />
                           </td>
                         </tr>
@@ -952,78 +1013,93 @@ export function MenuBuilderClient({
             <div className="mt-4 divide-y divide-[var(--border-subtle)]">
               {cat.items.map((item) => {
                 const isVerified = item.verificationStatus === "RESTAURANT_VERIFIED";
+                const isSelected = selectedItemIds.includes(item.id);
+
                 return (
                   <div
                     key={item.id}
                     className="flex flex-col justify-between gap-4 py-4 md:flex-row md:items-center"
                   >
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-bold text-[var(--text-primary)]">{item.nameEn}</span>
-                        <span className="text-sm text-[var(--text-secondary)]" dir="rtl">
-                          ({item.nameAr})
-                        </span>
-                        <span className="rounded-lg bg-[var(--bg-muted)] px-2.5 py-0.5 font-mono text-xs font-bold">
-                          AED {item.priceAed}
-                        </span>
-
-                        {isVerified ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span>Restaurant Verified</span>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() =>
+                          setSelectedItemIds((prev) => toggleArrayValue(prev, item.id))
+                        }
+                        aria-label={`Select ${item.nameEn}`}
+                        className="mt-1 h-4 w-4 rounded"
+                      />
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-[var(--text-primary)]">
+                            {item.nameEn}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
-                            <AlertTriangle className="h-3.5 w-3.5" />
-                            <span>AI Suggested (Unverified)</span>
+                          <span className="text-sm text-[var(--text-secondary)]" dir="rtl">
+                            ({item.nameAr})
                           </span>
-                        )}
-
-                        {!item.allergenDataProvided && (
-                          <span className="rounded-full bg-red-500/15 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:text-red-300">
-                            Allergen Data Missing
+                          <span className="rounded-lg bg-[var(--bg-muted)] px-2.5 py-0.5 font-mono text-xs font-bold">
+                            AED {item.priceAed}
                           </span>
-                        )}
 
-                        <span
-                          className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            item.isPublished
-                              ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                              : "bg-[var(--bg-muted)] text-[var(--text-secondary)]"
-                          }`}
-                        >
-                          {item.isPublished ? "Published" : "Draft"}
-                        </span>
-                      </div>
-
-                      <div className="flex flex-wrap gap-1.5 text-xs">
-                        {item.dietTags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                        {item.allergens.length > 0 ? (
-                          item.allergens.map((alg) => (
-                            <span
-                              key={alg}
-                              className="rounded-md bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-300"
-                            >
-                              Allergen: {alg}
+                          {isVerified ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              <span>Restaurant Verified</span>
                             </span>
-                          ))
-                        ) : item.allergenDataProvided ? (
-                          <span className="text-[var(--text-secondary)]">
-                            Confirmed 0 major allergens
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                              <AlertTriangle className="h-3.5 w-3.5" />
+                              <span>AI Suggested (Unverified)</span>
+                            </span>
+                          )}
+
+                          {!item.allergenDataProvided && (
+                            <span className="rounded-full bg-red-500/15 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:text-red-300">
+                              Allergen Data Unconfirmed
+                            </span>
+                          )}
+
+                          <span
+                            className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                              item.isPublished
+                                ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                : "bg-[var(--bg-muted)] text-[var(--text-secondary)]"
+                            }`}
+                          >
+                            {item.isPublished ? "Published" : "Draft"}
                           </span>
-                        ) : null}
-                        {item.modifiers.length > 0 && (
-                          <span className="rounded-md bg-[var(--accent-soft)] px-2 py-0.5 text-[var(--accent-primary)]">
-                            {item.modifiers.length} modifier(s)
-                          </span>
-                        )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 text-xs">
+                          {item.dietTags.map((tag) => (
+                            <span
+                              key={tag}
+                              className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                          {item.allergens.length > 0 ? (
+                            item.allergens.map((alg) => (
+                              <span
+                                key={alg}
+                                className="rounded-md bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-300"
+                              >
+                                Allergen: {alg}
+                              </span>
+                            ))
+                          ) : item.allergenDataProvided ? (
+                            <span className="text-[var(--text-secondary)]">
+                              Confirmed 0 major allergens
+                            </span>
+                          ) : null}
+                          {item.modifiers.length > 0 && (
+                            <span className="rounded-md bg-[var(--accent-soft)] px-2 py-0.5 text-[var(--accent-primary)]">
+                              {item.modifiers.length} modifier(s)
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1032,11 +1108,11 @@ export function MenuBuilderClient({
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => handleQuickVerify(item)}
+                          onClick={() => setConfirmingVerifyItems([item])}
                           className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
-                          <span>Verify Safe Tags</span>
+                          <span>Review &amp; Verify</span>
                         </button>
                       )}
                       <button
@@ -1071,6 +1147,78 @@ export function MenuBuilderClient({
         ))}
       </div>
 
+      {/* Explicit Allergen Verification Confirmation Modal (shows dishes + allergens before confirming) */}
+      {confirmingVerifyItems && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-xl">
+            <h2 className="text-xl font-bold text-[var(--text-primary)]">
+              Confirm Allergen &amp; Diet Safety Verification
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+              Please review the exact allergens, diet tags, meat type, and modifiers for each dish
+              below. Confirming marks these dishes as <strong>RESTAURANT_VERIFIED</strong> so
+              allergic diners may see them as safe.
+            </p>
+
+            <ul className="mt-4 divide-y divide-[var(--border-subtle)] rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-4">
+              {confirmingVerifyItems.map((it) => (
+                <li key={it.id} className="space-y-1.5 py-3 first:pt-0 last:pb-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold">
+                      {it.nameEn} ({it.nameAr})
+                    </span>
+                    <span className="font-mono text-xs text-[var(--text-secondary)]">
+                      Meat: {it.meatType}
+                    </span>
+                  </div>
+                  <p className="text-xs">
+                    <strong>Allergens:</strong>{" "}
+                    {it.allergens.length > 0 ? it.allergens.join(", ") : "None (0 major allergens)"}
+                  </p>
+                  <p className="text-xs">
+                    <strong>Diet tags:</strong>{" "}
+                    {it.dietTags.length > 0 ? it.dietTags.join(", ") : "None"}
+                  </p>
+                  {it.modifiers.length > 0 && (
+                    <p className="text-xs text-[var(--accent-primary)]">
+                      <strong>Modifiers:</strong>{" "}
+                      {it.modifiers
+                        .map(
+                          (m) =>
+                            `${m.nameEn} (removes: ${m.removesAllergens.join(", ") || "none"})`,
+                        )
+                        .join("; ")}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmingVerifyItems(null)}
+                className="min-h-10 rounded-xl border border-[var(--border-subtle)] px-4 py-2 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={handleConfirmVerifyModal}
+                className="min-h-10 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                I Confirm Allergens Are Accurate — Verify ({confirmingVerifyItems.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Dish & Modifiers Modal */}
       {editingItem && (
         <div
@@ -1091,7 +1239,7 @@ export function MenuBuilderClient({
                   className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-primary)]"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  <span>AI Suggest Allergens & Tags</span>
+                  <span>AI Suggest Allergens &amp; Tags</span>
                 </button>
               )}
             </div>
@@ -1264,8 +1412,8 @@ export function MenuBuilderClient({
                         onClick={() =>
                           setEditingItem({
                             ...editingItem,
+                            // Never auto-flip allergenDataProvided when toggling chips
                             allergens: toggleArrayValue(editingItem.allergens, alg),
-                            allergenDataProvided: true,
                           })
                         }
                         className={`min-h-9 rounded-full px-3 py-1 text-xs font-semibold ${
@@ -1288,8 +1436,8 @@ export function MenuBuilderClient({
                     }
                   />
                   <span>
-                    I confirm allergen information has been checked for this dish (required before
-                    verification)
+                    I explicitly confirm that allergen information for this dish has been checked by
+                    the restaurant (required before verification)
                   </span>
                 </label>
               </div>
@@ -1425,11 +1573,11 @@ export function MenuBuilderClient({
               </button>
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || !editingItem.allergenDataProvided}
                 onClick={() => handleSaveEditingItem(true)}
-                className="min-h-10 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                className="min-h-10 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
               >
-                Verify & Save Safe Tags
+                Verify &amp; Save Safe Tags
               </button>
             </div>
           </div>

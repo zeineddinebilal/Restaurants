@@ -29,13 +29,13 @@ function exactAedField(allowNegative = false) {
     .transform((val) => filsToAedString(aedToFils(val)));
 }
 
+// Client-sent modifier verificationStatus is never accepted; modifiers only verify via `reverify: true`
 const modifierPatchSchema = z.object({
   nameEn: z.string().trim().min(1).max(160),
   nameAr: z.string().trim().min(1).max(160),
   priceDeltaAed: exactAedField(true).default("0.00"),
   removesAllergens: z.array(z.string()).default([]),
   addsDietTags: z.array(z.string()).default([]),
-  verificationStatus: z.enum(["AI_SUGGESTED", "RESTAURANT_VERIFIED"]).optional(),
 });
 
 const updateItemSchema = z.object({
@@ -126,6 +126,7 @@ export async function PATCH(
       meatType: existing.meatType,
       ingredientsEn: existing.ingredientsEn,
       ingredientsAr: existing.ingredientsAr,
+      modifiers: existing.modifiers,
     },
     next: {
       allergenDataProvided: nextAllergenDataProvided,
@@ -134,6 +135,7 @@ export async function PATCH(
       meatType: nextMeatType,
       ingredientsEn: nextIngredientsEn,
       ingredientsAr: nextIngredientsAr,
+      modifiers: parsed.data.modifiers,
     },
     reverify: parsed.data.reverify,
   });
@@ -146,18 +148,17 @@ export async function PATCH(
   }
 
   const now = new Date();
-  const nextVerifiedAt =
-    statusResolution.verificationStatus === "RESTAURANT_VERIFIED"
-      ? statusResolution.keepVerifiedMetadata
-        ? existing.verifiedAt
-        : now
-      : null;
-  const nextVerifiedById =
-    statusResolution.verificationStatus === "RESTAURANT_VERIFIED"
-      ? statusResolution.keepVerifiedMetadata
-        ? existing.verifiedById
-        : access.user.id
-      : null;
+  const isNowVerified = statusResolution.verificationStatus === "RESTAURANT_VERIFIED";
+  const nextVerifiedAt = isNowVerified
+    ? statusResolution.keepVerifiedMetadata
+      ? existing.verifiedAt
+      : now
+    : null;
+  const nextVerifiedById = isNowVerified
+    ? statusResolution.keepVerifiedMetadata
+      ? existing.verifiedById
+      : access.user.id
+    : null;
 
   const item = await prisma.$transaction(async (tx) => {
     if (parsed.data.modifiers !== undefined) {
@@ -171,26 +172,23 @@ export async function PATCH(
             priceDeltaAed: mod.priceDeltaAed,
             removesAllergens: normalizeAllergenList(mod.removesAllergens),
             addsDietTags: normalizeDietTagList(mod.addsDietTags),
-            verificationStatus: parsed.data.reverify
-              ? "RESTAURANT_VERIFIED"
-              : (mod.verificationStatus ?? "AI_SUGGESTED"),
+            // Modifiers become verified ONLY when the parent dish passes verification (`isNowVerified`)
+            verificationStatus: isNowVerified ? "RESTAURANT_VERIFIED" : "AI_SUGGESTED",
           })),
         });
       }
-    } else if (parsed.data.reverify && existing.modifiers.length > 0) {
-      await tx.menuItemModifier.updateMany({
-        where: { menuItemId: existing.id },
-        data: { verificationStatus: "RESTAURANT_VERIFIED" },
-      });
-    } else if (
-      statusResolution.verificationStatus === "AI_SUGGESTED" &&
-      existing.verificationStatus === "RESTAURANT_VERIFIED"
-    ) {
-      // Downgrade modifier verification alongside the parent dish if safety fields were edited
-      await tx.menuItemModifier.updateMany({
-        where: { menuItemId: existing.id },
-        data: { verificationStatus: "AI_SUGGESTED" },
-      });
+    } else if (existing.modifiers.length > 0) {
+      if (parsed.data.reverify && isNowVerified) {
+        await tx.menuItemModifier.updateMany({
+          where: { menuItemId: existing.id },
+          data: { verificationStatus: "RESTAURANT_VERIFIED" },
+        });
+      } else if (!isNowVerified) {
+        await tx.menuItemModifier.updateMany({
+          where: { menuItemId: existing.id },
+          data: { verificationStatus: "AI_SUGGESTED" },
+        });
+      }
     }
 
     return tx.menuItem.update({

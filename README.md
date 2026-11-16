@@ -60,11 +60,12 @@ Restaurants pay **`min(AED 1.00, 10% × order subtotal)`** (round half up) only 
 
 1. Push to `main` on `zeineddinebilal/Restaurants`.
 2. In the Render Dashboard, click **New +** -> **Blueprint** and select `zeineddinebilal/Restaurants`.
-3. Render reads `render.yaml` and provisions:
-   - **`platefit-db`** (PostgreSQL): Defaults to `plan: basic-256mb` (Render's paid starter tier) because **Render's `free` PostgreSQL databases expire after 30 days**. For temporary free evaluation, change `plan: basic-256mb` to `plan: free` in `render.yaml`.
-   - **`platefit-web`** (Node Web Service):
+3. Render reads `render.yaml` and provisions (defaulted to **Free** plans for the demo):
+   - **`platefit-db`** (PostgreSQL, `plan: free`): **Render's free PostgreSQL databases expire after 30 days.** For persistent production storage, upgrade `plan: free` to `plan: basic-256mb` in `render.yaml`.
+   - **`platefit-web`** (Node Web Service, `plan: free`):
+     - **Free-tier cold start note:** Render's free web service spins down after ~15 minutes of inactivity (~1 minute cold start on next request). **Open the live URL ~1 minute before starting a restaurant pitch** so the instance is warm (or upgrade to `plan: starter` for always-on hosting).
      - Builds with `npm ci --include=dev && npm run build` so Prisma CLI, Tailwind CSS, TypeScript, and `tsx` remain available when `NODE_ENV=production`.
-     - Runs `npx prisma migrate deploy && npm run start` in `startCommand` so migrations always execute before server startup on **both** free and paid web plans (`preDeployCommand` only runs on paid web instances).
+     - **Automatic migrations & seed on startup (no Render Shell required):** Runs `npx prisma migrate deploy && npm run db:seed && npm run start` in `startCommand`. `prisma/seed.ts` is strictly idempotent: when `SEED_DEMO=false`, it only ensures `PlatformSetting`; when `SEED_DEMO=true` (and `DEMO_PASSWORD` is set in Render Environment), it automatically upserts the `@example.com` demo users and the 42-dish `"Demo Lebanese Kitchen"` menu on boot without needing Render Shell.
      - Monitored via `/api/health` (verifies both app liveness and PostgreSQL connectivity).
      - Uses an in-memory per-instance sliding-window rate limiter (appropriate for a single Render web service instance; client IP extraction prefers Render's `true-client-ip`, falling back to the last entry of `x-forwarded-for`).
      - Dish photo uploads require S3 env vars (`S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) in production; local `public/uploads` fallback is restricted strictly to `NODE_ENV=development` because Render's container filesystem is ephemeral.
