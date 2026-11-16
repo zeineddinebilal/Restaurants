@@ -104,6 +104,8 @@ export function sanitizeExternalScannerDishes(
 export async function runExternalMenuScannerAgent(params: {
   images: ReadonlyArray<{ mimeType: string; base64Data: string; byteLength: number }>;
   userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
 }): Promise<
   AgentCallResult<{
     sourceLabel: string;
@@ -160,6 +162,8 @@ Output JSON:
     contents: [{ role: "user", parts }],
     schema: rawExternalScanSchema,
     userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
     timeoutMs: 25_000,
   });
 

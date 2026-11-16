@@ -458,6 +458,9 @@ model AiUsageLog {
   id           String   @id @default(cuid())
   agentName    String
   model        String
+  status       String   @default("COMPLETED")
+  callerKey    String?
+  clientIp     String?
   inputTokens  Int      @default(0)
   outputTokens Int      @default(0)
   latencyMs    Int      @default(0)
@@ -470,6 +473,9 @@ model AiUsageLog {
   restaurant Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: SetNull)
   user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([createdAt])
+  @@index([callerKey, createdAt])
+  @@index([clientIp, createdAt])
   @@index([agentName, createdAt])
   @@index([restaurantId, createdAt])
 }

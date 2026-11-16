@@ -1,3 +1,4 @@
+import { PrismaClient } from "@prisma/client";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -6,10 +7,13 @@ import {
 } from "@/lib/agents/external-scanner";
 import { postProcessGroupTablePlan, runGroupTableAgent } from "@/lib/agents/group-table";
 import {
-  checkDailyAiQuota,
+  finalizeAiQuotaSlot,
+  getDailyAiQuotaLimits,
+  reserveDailyAiQuotaSlot,
   validateAiImagesPayload,
   wrapUntrustedText,
 } from "@/lib/agents/guardrails";
+import { startEphemeralPrismaPostgres } from "@/lib/__tests__/helpers/local-pg";
 import {
   isAllergyOrDietQuery,
   postProcessMenuAssistantOutput,
@@ -347,14 +351,113 @@ describe("Phase 6 — Group Table Agent Server Pricing & Insights Privacy", () =
   });
 });
 
-describe("Phase 6 — Quotas, Image Limits & Missing Key Graceful Degradation", () => {
-  it("enforces daily AI quotas and <= 4 images / <= 5 MB image payload caps", () => {
-    const uniqueKey = `test-caller-${Date.now()}`;
-    assert.equal(checkDailyAiQuota({ callerKey: uniqueKey, perCallerDailyLimit: 2 }).allowed, true);
-    assert.equal(checkDailyAiQuota({ callerKey: uniqueKey, perCallerDailyLimit: 2 }).allowed, true);
-    const blocked = checkDailyAiQuota({ callerKey: uniqueKey, perCallerDailyLimit: 2 });
-    assert.equal(blocked.allowed, false);
+describe("Phase 6 — DB-Backed AI Quotas, Image Limits & Missing Key Graceful Degradation", () => {
+  it("enforces DB-backed caller, IP, and AI_DAILY_GLOBAL_LIMIT caps across restarts and parallel requests", async () => {
+    const env = await startEphemeralPrismaPostgres();
+    const prevGlobal = process.env.AI_DAILY_GLOBAL_LIMIT;
+    const prevIp = process.env.AI_DAILY_IP_LIMIT;
+    try {
+      const defaults = getDailyAiQuotaLimits();
+      assert.equal(defaults.callerLimit, 40);
+      assert.equal(defaults.ipLimit, 60);
+      assert.equal(defaults.restaurantLimit, 500);
+      assert.equal(defaults.globalLimit, 2000);
 
+      process.env.AI_DAILY_IP_LIMIT = "2";
+      process.env.AI_DAILY_GLOBAL_LIMIT = "4";
+
+      // Reserve 2 slots from IP 203.0.113.55 using first Prisma client
+      const r1 = await reserveDailyAiQuotaSlot(
+        {
+          agentName: "externalMenuScannerAgent",
+          model: "gemini-flash-latest",
+          callerKey: "guest:cookie_a",
+          clientIp: "203.0.113.55",
+        },
+        env.prisma,
+      );
+      assert.equal(r1.allowed, true);
+      if (r1.allowed) {
+        const pendingRow = await env.prisma.aiUsageLog.findUnique({ where: { id: r1.logId } });
+        assert.equal(pendingRow?.status, "PENDING");
+        await finalizeAiQuotaSlot(
+          r1.logId,
+          { success: true, inputTokens: 120, outputTokens: 80, latencyMs: 310 },
+          env.prisma,
+        );
+        const completedRow = await env.prisma.aiUsageLog.findUnique({ where: { id: r1.logId } });
+        assert.equal(completedRow?.status, "COMPLETED");
+        assert.equal(completedRow?.success, true);
+      }
+
+      const r2 = await reserveDailyAiQuotaSlot(
+        {
+          agentName: "externalMenuScannerAgent",
+          model: "gemini-flash-latest",
+          callerKey: "guest:cookie_a",
+          clientIp: "203.0.113.55",
+        },
+        env.prisma,
+      );
+      assert.equal(r2.allowed, true);
+
+      // Simulate Render restart (brand-new PrismaClient, zero shared memory)
+      // AND guest clearing cookies (`guest:brand_new_cookie_b`) from same IP:
+      const freshClientAfterRestart = new PrismaClient({
+        datasources: { db: { url: env.databaseUrl } },
+      });
+      try {
+        const blockedByIp = await reserveDailyAiQuotaSlot(
+          {
+            agentName: "externalMenuScannerAgent",
+            model: "gemini-flash-latest",
+            callerKey: "guest:brand_new_cookie_b",
+            clientIp: "203.0.113.55",
+          },
+          freshClientAfterRestart,
+        );
+        assert.equal(blockedByIp.allowed, false);
+        if (!blockedByIp.allowed) {
+          assert.equal(blockedByIp.scope, "ip");
+        }
+
+        // Fire 5 parallel requests from distinct callers & IPs when only 2 global slots remain (4 - 2 = 2)
+        const parallelResults = await Promise.all(
+          Array.from({ length: 5 }, (_, idx) =>
+            reserveDailyAiQuotaSlot(
+              {
+                agentName: "menuAssistantAgent",
+                model: "gemini-flash-latest",
+                callerKey: `user:parallel_${idx}`,
+                clientIp: `198.51.100.${idx + 1}`,
+              },
+              freshClientAfterRestart,
+            ),
+          ),
+        );
+
+        const allowedCount = parallelResults.filter((x) => x.allowed).length;
+        const globalBlockedCount = parallelResults.filter(
+          (x) => !x.allowed && x.scope === "global",
+        ).length;
+        assert.equal(allowedCount, 2);
+        assert.equal(globalBlockedCount, 3);
+
+        const totalRowsInDb = await freshClientAfterRestart.aiUsageLog.count();
+        assert.equal(totalRowsInDb, 4);
+      } finally {
+        await freshClientAfterRestart.$disconnect();
+      }
+    } finally {
+      if (prevGlobal === undefined) delete process.env.AI_DAILY_GLOBAL_LIMIT;
+      else process.env.AI_DAILY_GLOBAL_LIMIT = prevGlobal;
+      if (prevIp === undefined) delete process.env.AI_DAILY_IP_LIMIT;
+      else process.env.AI_DAILY_IP_LIMIT = prevIp;
+      await env.stop();
+    }
+  });
+
+  it("enforces <= 4 images / <= 5 MB image payload caps", () => {
     // > 4 images rejected
     const fiveImages = Array.from({ length: 5 }, () => ({
       mimeType: "image/jpeg",

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { checkDailyAiQuota } from "@/lib/agents/guardrails";
+import { httpStatusForAgentError } from "@/lib/agents/gemini";
 import { runTasteProfileAgent } from "@/lib/agents/taste-profile";
 import { getVerifiedGuestToken } from "@/lib/auth/guest";
 import { getLiveAuthenticatedUser } from "@/lib/auth/rbac";
@@ -41,24 +41,18 @@ export async function POST(req: NextRequest) {
     getLiveAuthenticatedUser(),
     getVerifiedGuestToken(),
   ]);
-  const callerKey = liveUser
-    ? `user:${liveUser.id}`
-    : guestToken
-      ? `guest:${guestToken}`
-      : `ip:${clientIp}`;
-  const quota = checkDailyAiQuota({ callerKey });
-  if (!quota.allowed) {
-    return NextResponse.json({ error: quota.reason }, { status: 429 });
-  }
+  const callerKey = liveUser ? `user:${liveUser.id}` : guestToken ? `guest:${guestToken}` : null;
 
   const result = await runTasteProfileAgent({
     message: parsed.data.message,
     locale: parsed.data.locale,
     userId: liveUser?.id,
+    callerKey,
+    clientIp,
   });
 
   if (!result.ok) {
-    const status = result.reason === "AI_NOT_CONFIGURED" ? 503 : 422;
+    const status = httpStatusForAgentError(result.reason);
     return NextResponse.json({ error: result.message, reason: result.reason }, { status });
   }
 

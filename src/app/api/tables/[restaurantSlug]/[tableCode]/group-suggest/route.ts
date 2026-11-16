@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { httpStatusForAgentError } from "@/lib/agents/gemini";
 import { runGroupTableAgent } from "@/lib/agents/group-table";
-import { checkDailyAiQuota } from "@/lib/agents/guardrails";
 import { verifySignedGuestCookieValue, GUEST_COOKIE_NAME } from "@/lib/auth/guest";
 import { prisma } from "@/lib/db";
 import { getActiveDinerProfile } from "@/lib/diner/profile";
@@ -105,15 +105,7 @@ export async function POST(
     ? `user:${activeDiner.userId}`
     : guestToken
       ? `guest:${guestToken}`
-      : `ip:${clientIp}`;
-
-  const quota = checkDailyAiQuota({
-    callerKey,
-    restaurantId: restaurant.id,
-  });
-  if (!quota.allowed) {
-    return NextResponse.json({ error: quota.reason }, { status: 429 });
-  }
+      : null;
 
   const participants = await prisma.tableParticipant.findMany({
     where: { tableSessionId: session.id },
@@ -186,10 +178,12 @@ export async function POST(
       },
     })),
     userId: activeDiner.userId,
+    callerKey,
+    clientIp,
   });
 
   if (!result.ok) {
-    const status = result.reason === "AI_NOT_CONFIGURED" ? 503 : 422;
+    const status = httpStatusForAgentError(result.reason);
     return NextResponse.json({ error: result.message, reason: result.reason }, { status });
   }
 

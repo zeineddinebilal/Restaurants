@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runDishTaggingAgent } from "@/lib/agents/dish-tagging";
-import { checkDailyAiQuota } from "@/lib/agents/guardrails";
+import { httpStatusForAgentError } from "@/lib/agents/gemini";
+import { peekDailyAiQuota } from "@/lib/agents/guardrails";
 import { ALLOWED_INGESTION_MIMES, runMenuIngestionAgent } from "@/lib/agents/menu-ingestion";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { requireRestaurantOwnerApi } from "@/lib/restaurant/access";
@@ -39,8 +40,10 @@ export async function POST(
     );
   }
 
-  const quota = checkDailyAiQuota({
-    callerKey: `user:${access.user.id}`,
+  const callerKey = `user:${access.user.id}`;
+  const quota = await peekDailyAiQuota({
+    callerKey,
+    clientIp,
     restaurantId,
   });
   if (!quota.allowed) {
@@ -114,10 +117,12 @@ export async function POST(
     files,
     restaurantId,
     userId: access.user.id,
+    callerKey,
+    clientIp,
   });
 
   if (!ingestionResult.ok) {
-    const status = ingestionResult.reason === "AI_NOT_CONFIGURED" ? 503 : 422;
+    const status = httpStatusForAgentError(ingestionResult.reason);
     return NextResponse.json(
       {
         error: ingestionResult.message,
@@ -142,6 +147,8 @@ export async function POST(
     dishes: flatItems,
     restaurantId,
     userId: access.user.id,
+    callerKey,
+    clientIp,
   });
 
   const tagByIndex = new Map(

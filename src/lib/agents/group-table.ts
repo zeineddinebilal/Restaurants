@@ -156,6 +156,8 @@ export async function runGroupTableAgent(params: {
     profile: EngineDinerProfile;
   }>;
   userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
 }): Promise<AgentCallResult<GroupTableAgentOutput>> {
   const groupEval = evaluateGroupSharedDishes({
     dishes: params.dishes,
@@ -246,6 +248,8 @@ Output JSON: { "summary": string, "sharedDishIds": string[], "perPersonPicks": [
     schema: rawGroupAgentSchema,
     restaurantId: params.restaurantId,
     userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
     timeoutMs: 20_000,
   });
 

@@ -2,9 +2,9 @@ import type { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { runExternalMenuScannerAgent } from "@/lib/agents/external-scanner";
 import {
-  checkDailyAiQuota,
   MAX_AI_IMAGES,
   MAX_AI_TOTAL_IMAGE_BYTES,
+  peekDailyAiQuota,
   validateAiImagesPayload,
 } from "@/lib/agents/guardrails";
 import {
@@ -79,9 +79,9 @@ export async function POST(req: NextRequest) {
     ? `user:${activeDiner.userId}`
     : guestToken
       ? `guest:${guestToken}`
-      : `ip:${clientIp}`;
+      : null;
 
-  const quota = checkDailyAiQuota({ callerKey, perCallerDailyLimit: 20 });
+  const quota = await peekDailyAiQuota({ callerKey, clientIp });
   if (!quota.allowed) {
     return redirectToScanner(req, { shareError: "daily_limit" });
   }
@@ -104,11 +104,18 @@ export async function POST(req: NextRequest) {
   const result = await runExternalMenuScannerAgent({
     images,
     userId: activeDiner.userId,
+    callerKey,
+    clientIp,
   });
 
   if (!result.ok) {
     return redirectToScanner(req, {
-      shareError: result.reason === "AI_NOT_CONFIGURED" ? "ai_not_configured" : "scan_failed",
+      shareError:
+        result.reason === "AI_NOT_CONFIGURED"
+          ? "ai_not_configured"
+          : result.reason === "AI_QUOTA_EXCEEDED"
+            ? "daily_limit"
+            : "scan_failed",
     });
   }
 

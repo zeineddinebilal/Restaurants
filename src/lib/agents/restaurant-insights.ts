@@ -131,6 +131,8 @@ export async function runRestaurantInsightsAgent(params: {
   aggregates: AnonymousRestaurantAggregateInput;
   locale?: Locale;
   userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
   forceRefresh?: boolean;
 }): Promise<AgentCallResult<RestaurantInsightsOutput>> {
   const utcDay = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -168,6 +170,8 @@ Output JSON:
     schema: rawInsightsSchema,
     restaurantId: params.restaurantId,
     userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
     timeoutMs: 20_000,
   });
 

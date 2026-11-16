@@ -1,7 +1,7 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { AnalyticsClient } from "@/app/(restaurant)/dashboard/analytics/AnalyticsClient";
 import { getGeminiConfig } from "@/lib/agents/gemini";
-import { checkDailyAiQuota } from "@/lib/agents/guardrails";
 import {
   buildAnonymousAggregatePayload,
   getCachedRestaurantInsights,
@@ -11,6 +11,7 @@ import { requirePageRole } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
 import { pickLocalized } from "@/lib/i18n/dictionaries";
 import { getI18nContext } from "@/lib/i18n/server";
+import { getClientIp } from "@/lib/rate-limit";
 import { loadManagedRestaurants } from "@/lib/restaurant/loader";
 
 export const dynamic = "force-dynamic";
@@ -20,9 +21,10 @@ export default async function RestaurantAnalyticsPage({
 }: {
   searchParams: Promise<{ restaurantId?: string }>;
 }) {
-  const [user, { locale }, sp] = await Promise.all([
+  const [user, { locale }, hdrs, sp] = await Promise.all([
     requirePageRole(["RESTAURANT_OWNER", "ADMIN"]),
     getI18nContext(),
+    headers(),
     searchParams,
   ]);
 
@@ -93,24 +95,18 @@ export default async function RestaurantAnalyticsPage({
   let initialAiNotice: string | null = null;
 
   if (geminiCfg.configured && !initialInsights) {
-    const quota = checkDailyAiQuota({
-      callerKey: `user:${user.id}`,
+    const res = await runRestaurantInsightsAgent({
       restaurantId: activeRestaurant.id,
+      aggregates,
+      locale,
+      userId: user.id,
+      callerKey: `user:${user.id}`,
+      clientIp: getClientIp(hdrs),
     });
-    if (quota.allowed) {
-      const res = await runRestaurantInsightsAgent({
-        restaurantId: activeRestaurant.id,
-        aggregates,
-        locale,
-        userId: user.id,
-      });
-      if (res.ok) {
-        initialInsights = res.data;
-      } else {
-        initialAiNotice = res.message;
-      }
+    if (res.ok) {
+      initialInsights = res.data;
     } else {
-      initialAiNotice = quota.reason ?? null;
+      initialAiNotice = res.message;
     }
   }
 

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getGeminiConfig } from "@/lib/agents/gemini";
-import { checkDailyAiQuota } from "@/lib/agents/guardrails";
+import { getGeminiConfig, httpStatusForAgentError } from "@/lib/agents/gemini";
 import {
   buildAnonymousAggregatePayload,
   getCachedRestaurantInsights,
@@ -73,7 +72,7 @@ async function loadAnonymousRestaurantMetrics(restaurantId: string) {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ restaurantId: string }> },
 ) {
   const { restaurantId } = await context.params;
@@ -103,25 +102,13 @@ export async function GET(
     });
   }
 
-  const quota = checkDailyAiQuota({
-    callerKey: `user:${access.user.id}`,
-    restaurantId,
-  });
-
-  if (!quota.allowed) {
-    return NextResponse.json({
-      aggregates,
-      highAllergenDishes,
-      aiConfigured: true,
-      insights: null,
-      aiNotice: quota.reason,
-    });
-  }
-
+  const clientIp = getClientIp(req.headers);
   const aiResult = await runRestaurantInsightsAgent({
     restaurantId,
     aggregates,
     userId: access.user.id,
+    callerKey: `user:${access.user.id}`,
+    clientIp,
     forceRefresh: false,
   });
 
@@ -155,24 +142,18 @@ export async function POST(
     );
   }
 
-  const quota = checkDailyAiQuota({
-    callerKey: `user:${access.user.id}`,
-    restaurantId,
-  });
-  if (!quota.allowed) {
-    return NextResponse.json({ error: quota.reason }, { status: 429 });
-  }
-
   const { aggregates, highAllergenDishes } = await loadAnonymousRestaurantMetrics(restaurantId);
   const aiResult = await runRestaurantInsightsAgent({
     restaurantId,
     aggregates,
     userId: access.user.id,
+    callerKey: `user:${access.user.id}`,
+    clientIp,
     forceRefresh: true,
   });
 
   if (!aiResult.ok) {
-    const status = aiResult.reason === "AI_NOT_CONFIGURED" ? 503 : 422;
+    const status = httpStatusForAgentError(aiResult.reason);
     return NextResponse.json({ error: aiResult.message, reason: aiResult.reason }, { status });
   }
 

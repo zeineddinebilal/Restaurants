@@ -1,10 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { runExternalMenuScannerAgent } from "@/lib/agents/external-scanner";
+import { httpStatusForAgentError } from "@/lib/agents/gemini";
 import {
-  checkDailyAiQuota,
   MAX_AI_IMAGES,
   MAX_AI_TOTAL_IMAGE_BYTES,
+  peekDailyAiQuota,
   validateAiImagesPayload,
 } from "@/lib/agents/guardrails";
 import {
@@ -112,11 +113,11 @@ export async function POST(req: NextRequest) {
     ? `user:${activeDiner.userId}`
     : guestToken
       ? `guest:${guestToken}`
-      : `ip:${clientIp}`;
+      : null;
 
-  const quota = checkDailyAiQuota({
+  const quota = await peekDailyAiQuota({
     callerKey,
-    perCallerDailyLimit: 20,
+    clientIp,
   });
   if (!quota.allowed) {
     return NextResponse.json({ error: quota.reason }, { status: 429 });
@@ -143,10 +144,12 @@ export async function POST(req: NextRequest) {
   const result = await runExternalMenuScannerAgent({
     images,
     userId: activeDiner.userId,
+    callerKey,
+    clientIp,
   });
 
   if (!result.ok) {
-    const status = result.reason === "AI_NOT_CONFIGURED" ? 503 : 422;
+    const status = httpStatusForAgentError(result.reason);
     return NextResponse.json({ error: result.message, reason: result.reason }, { status });
   }
 

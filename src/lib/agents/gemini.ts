@@ -1,7 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
-import { PROMPT_INJECTION_SYSTEM_GUARDRAIL } from "@/lib/agents/guardrails";
-import { prisma } from "@/lib/db";
+import {
+  finalizeAiQuotaSlot,
+  PROMPT_INJECTION_SYSTEM_GUARDRAIL,
+  reserveDailyAiQuotaSlot,
+} from "@/lib/agents/guardrails";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
 export const DEFAULT_AI_TIMEOUT_MS = 25_000;
@@ -20,6 +23,9 @@ export function getGeminiConfig(): {
   };
 }
 
+export type AgentFailureReason =
+  "AI_NOT_CONFIGURED" | "AI_QUOTA_EXCEEDED" | "AI_CALL_FAILED" | "SCHEMA_VALIDATION_FAILED";
+
 export type AgentCallResult<T> =
   | {
       ok: true;
@@ -31,43 +37,33 @@ export type AgentCallResult<T> =
     }
   | {
       ok: false;
-      reason: "AI_NOT_CONFIGURED" | "AI_CALL_FAILED" | "SCHEMA_VALIDATION_FAILED";
+      reason: AgentFailureReason;
       message: string;
     };
 
-async function recordAiLog(entry: {
-  agentName: string;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  latencyMs: number;
-  success: boolean;
-  errorMessage?: string;
-  restaurantId?: string;
-  userId?: string;
-}): Promise<void> {
-  try {
-    await prisma.aiUsageLog.create({
-      data: entry,
-    });
-  } catch {
-    // Never fail an application flow if telemetry logging encounters a transient DB issue
-  }
+export function httpStatusForAgentError(reason: AgentFailureReason): number {
+  if (reason === "AI_NOT_CONFIGURED") return 503;
+  if (reason === "AI_QUOTA_EXCEEDED") return 429;
+  return 422;
 }
 
 /**
- * Shared Gemini runner for all 8 platform AI agents.
+ * Shared Gemini runner for all platform AI agents.
  * - Handles missing GEMINI_API_KEY gracefully ("AI not configured")
+ * - Reserves a DB-backed `PENDING` row in `AiUsageLog` BEFORE calling Gemini (enforcing global,
+ *   caller, client IP, and restaurant daily caps across restarts and parallel requests)
  * - Prepends prompt-injection isolation instructions on every call
  * - Enforces a short request timeout (`timeoutMs`, default 25s)
  * - Validates structured JSON output with Zod before returning
- * - Logs latency & token usage to AiUsageLog
+ * - Finalizes latency & token usage on the reserved `AiUsageLog` row
  */
 export async function runStructuredAgent<T>(params: {
   agentName: string;
   systemInstruction: string;
   contents: Parameters<GoogleGenAI["models"]["generateContent"]>[0]["contents"];
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
+  callerKey?: string | null;
+  clientIp?: string | null;
   restaurantId?: string;
   userId?: string;
   timeoutMs?: number;
@@ -78,6 +74,23 @@ export async function runStructuredAgent<T>(params: {
       ok: false,
       reason: "AI_NOT_CONFIGURED",
       message: "AI not configured",
+    };
+  }
+
+  const slot = await reserveDailyAiQuotaSlot({
+    agentName: params.agentName,
+    model: cfg.model,
+    callerKey: params.callerKey ?? (params.userId ? `user:${params.userId}` : null),
+    clientIp: params.clientIp ?? null,
+    restaurantId: params.restaurantId ?? null,
+    userId: params.userId ?? null,
+  });
+
+  if (!slot.allowed) {
+    return {
+      ok: false,
+      reason: "AI_QUOTA_EXCEEDED",
+      message: slot.reason,
     };
   }
 
@@ -105,16 +118,12 @@ export async function runStructuredAgent<T>(params: {
     try {
       parsedJson = JSON.parse(rawText);
     } catch {
-      await recordAiLog({
-        agentName: params.agentName,
-        model: cfg.model,
+      await finalizeAiQuotaSlot(slot.logId, {
+        success: false,
         inputTokens,
         outputTokens,
         latencyMs,
-        success: false,
         errorMessage: "Model response was not valid JSON",
-        restaurantId: params.restaurantId,
-        userId: params.userId,
       });
       return {
         ok: false,
@@ -125,16 +134,12 @@ export async function runStructuredAgent<T>(params: {
 
     const validated = params.schema.safeParse(parsedJson);
     if (!validated.success) {
-      await recordAiLog({
-        agentName: params.agentName,
-        model: cfg.model,
+      await finalizeAiQuotaSlot(slot.logId, {
+        success: false,
         inputTokens,
         outputTokens,
         latencyMs,
-        success: false,
         errorMessage: validated.error.message.slice(0, 500),
-        restaurantId: params.restaurantId,
-        userId: params.userId,
       });
       return {
         ok: false,
@@ -143,15 +148,11 @@ export async function runStructuredAgent<T>(params: {
       };
     }
 
-    await recordAiLog({
-      agentName: params.agentName,
-      model: cfg.model,
+    await finalizeAiQuotaSlot(slot.logId, {
+      success: true,
       inputTokens,
       outputTokens,
       latencyMs,
-      success: true,
-      restaurantId: params.restaurantId,
-      userId: params.userId,
     });
 
     return {
@@ -165,16 +166,12 @@ export async function runStructuredAgent<T>(params: {
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
     const message = err instanceof Error ? err.message : "Unknown AI error";
-    await recordAiLog({
-      agentName: params.agentName,
-      model: cfg.model,
+    await finalizeAiQuotaSlot(slot.logId, {
+      success: false,
       inputTokens: 0,
       outputTokens: 0,
       latencyMs,
-      success: false,
       errorMessage: message.slice(0, 500),
-      restaurantId: params.restaurantId,
-      userId: params.userId,
     });
     return {
       ok: false,

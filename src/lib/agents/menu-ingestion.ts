@@ -103,6 +103,8 @@ export async function runMenuIngestionAgent(params: {
   files?: Array<{ mimeType: string; base64Data: string }>;
   restaurantId?: string;
   userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
 }): Promise<AgentCallResult<MenuIngestionOutput>> {
   const hasText = Boolean(params.pastedText?.trim());
   const files = params.files ?? [];
@@ -162,6 +164,8 @@ Rules:
     schema: rawIngestionOutputSchema,
     restaurantId: params.restaurantId,
     userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
   });
 
   if (!rawResult.ok) {

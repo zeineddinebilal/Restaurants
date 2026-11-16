@@ -76,6 +76,8 @@ export async function runDishTaggingAgent(params: {
   dishes: DishTaggingInputItem[];
   restaurantId?: string;
   userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
 }): Promise<AgentCallResult<{ items: DishTagSuggestion[] }>> {
   if (params.dishes.length === 0) {
     return {
@@ -132,6 +134,8 @@ Safety rules:
     schema: rawTaggingOutputSchema,
     restaurantId: params.restaurantId,
     userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
   });
 
   if (!rawResult.ok) {

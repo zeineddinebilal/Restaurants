@@ -48,6 +48,8 @@ export async function runTasteProfileAgent(params: {
   message: string;
   locale: Locale;
   userId?: string;
+  callerKey?: string | null;
+  clientIp?: string | null;
 }): Promise<AgentCallResult<TasteProfileAgentOutput>> {
   const systemInstruction = `You are the Taste Profile Agent for a UAE dining personalization app (currency: AED).
 Convert the diner's message into a structured JSON profile patch and a warm 1-2 sentence reply in ${params.locale === "ar" ? "Arabic" : "English"}.
@@ -71,6 +73,8 @@ JSON schema:
     contents: wrapUntrustedText(params.message.trim(), 1500),
     schema: rawTasteProfileSchema,
     userId: params.userId,
+    callerKey: params.callerKey,
+    clientIp: params.clientIp,
   });
 
   if (!rawResult.ok) {

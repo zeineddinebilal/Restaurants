@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runDishTaggingAgent } from "@/lib/agents/dish-tagging";
-import { checkDailyAiQuota } from "@/lib/agents/guardrails";
+import { httpStatusForAgentError } from "@/lib/agents/gemini";
+import { peekDailyAiQuota } from "@/lib/agents/guardrails";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { requireRestaurantOwnerApi } from "@/lib/restaurant/access";
 
@@ -45,8 +46,10 @@ export async function POST(
     );
   }
 
-  const quota = checkDailyAiQuota({
-    callerKey: `user:${access.user.id}`,
+  const callerKey = `user:${access.user.id}`;
+  const quota = await peekDailyAiQuota({
+    callerKey,
+    clientIp,
     restaurantId,
   });
   if (!quota.allowed) {
@@ -69,10 +72,12 @@ export async function POST(
     dishes: parsed.data.dishes,
     restaurantId,
     userId: access.user.id,
+    callerKey,
+    clientIp,
   });
 
   if (!result.ok) {
-    const status = result.reason === "AI_NOT_CONFIGURED" ? 503 : 422;
+    const status = httpStatusForAgentError(result.reason);
     return NextResponse.json({ error: result.message, reason: result.reason }, { status });
   }
 
