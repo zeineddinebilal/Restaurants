@@ -1,0 +1,39 @@
+# Collaboration protocol state (never commit)
+.collab/
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build output
+.next/
+out/
+build/
+dist/
+
+# Environment variables & secrets (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Local development uploads & local embedded Postgres data
+public/uploads/
+.local-pg/
+
+# Testing & Playwright
+coverage/
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# Debug & OS files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+*.pem
+*.tsbuildinfo
+next-env.d.ts
